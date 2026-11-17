@@ -79,12 +79,6 @@ footer a:hover{color:var(--acc)}
   <div class="prog"><i id="pg"></i></div>
   <div class="mut" id="st" style="margin-top:6px"></div>
 
-  <div class="row">
-   <label>規劃步數上限 <select id="depth">
-    <option value="2">2 步(預設)</option><option value="3">3 步</option><option value="4">4 步(較慢,約 1 秒到數秒)</option>
-   </select></label>
-  </div>
-
   <details id="shot">
    <summary>截圖辨識(可上傳、拖曳或 Ctrl+V 貼上)</summary>
    <div class="mut" style="margin-top:6px">拖動畫面上的框,讓格線對準 5×5 卡片(拖角落調整大小、拖框內移動)。辨識依每張卡左上角的屬性色塊,框一移動就會即時更新盤面。</div>
@@ -98,9 +92,9 @@ footer a:hover{color:var(--acc)}
    <ul>
     <li>點一張只消除那一張 → 上方下落 → 空位隨機補滿 → 橫向或直向連續 3 張以上同屬性者自動消除(T 字、十字、L 字等線條交會也一起消),重複到沒有為止。2×2 方塊這類沒有 3 連線的不算。</li>
     <li>分數 = 總消除張數 ÷ 步數(每一步點一下)。每一步都假設你看到新盤面後再選最佳點(適應性策略),補牌是隨機的,所以算的是期望值。</li>
-    <li>對每個起手點,計算「接下來規劃 1 ~ 「規劃步數上限」步」的最大期望消除數,取 期望/步數 最高者;這就包含「先佈局、最後才爆」的情況。「規劃步數上限」越高越慢:2、3 步幾乎立刻算完,4 步在電腦上約 1 秒內、手機上可能要數秒。</li>
+    <li>對每個起手點,計算「接下來規劃 1 ~ 4 步」的最大期望消除數,取 期望/步數 最高者;這就包含「先佈局、最後才爆」的情況。計算在電腦上約 1 秒內、手機上可能要數秒。</li>
     <li>點下去補牌後盤面會變,建議每點一下就把新盤面輸入重算。</li>
-    <li>第一步的補牌結果為精確枚舉;連鎖過程中的補牌為隨機取樣(規劃步數上限為 2 時每個連鎖分支模擬 100 次;3、4 下為了速度大幅減少,誤差較大),所以分數是估計值,名次接近時可能互換。</li>
+    <li>每一步補進來的第一張牌為精確枚舉(五種屬性各算一次);連鎖過程中後續的補牌為隨機取樣(每個連鎖分支模擬 1 次),所以分數是估計值,名次接近時可能互換。同一個盤面重算會得到相同的結果。</li>
     <li>為了讓估計偏保守,新補進來的卡片彼此自己連成的線不算,只算跟留在盤面上的卡片相連的線。</li>
    </ul>
   </details>
@@ -408,6 +402,7 @@ function analyzeOne(board,H,a){
 
 <script>
 const NAMES=['水','火','木','光','暗'];
+const DEPTH=4; // 規劃步數上限(固定)
 let board=[
  4,4,2,3,4,
  4,4,3,2,2,
@@ -456,16 +451,15 @@ function render(){
 // 重新整理後保留盤面與上次的計算結果(只存在這個瀏覽器,不會上傳)
 const SAVE_KEY='element-chain-solver.v1';
 function saveState(){
-  try{localStorage.setItem(SAVE_KEY,JSON.stringify({board,results,depth:$('depth').value}));}catch(e){}
+  try{localStorage.setItem(SAVE_KEY,JSON.stringify({board,results}));}catch(e){}
 }
 function loadState(){
   try{
     const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'null');
     if(!d||!Array.isArray(d.board)||d.board.length!==25||!d.board.every(v=>Number.isInteger(v)&&v>=0&&v<5))return false;
     board=d.board;
-    if(['2','3','4'].includes(String(d.depth)))$('depth').value=String(d.depth);
     const r=d.results;
-    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&Number.isFinite(x.best)&&Number.isFinite(x.bestH)))results=r;
+    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&x.q.length===DEPTH+1&&Number.isFinite(x.best)&&Number.isFinite(x.bestH)))results=r; // 舊版以其他步數算出的結果不還原
     return true;
   }catch(e){return false;}
 }
@@ -572,17 +566,17 @@ function stopWorkers(){
   if(workers){workers.forEach(w=>w.terminate());workers=null;}
   if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;}
 }
-// 盤面或步數在計算途中被改掉時,停止進行中的計算(否則舊盤面的結果會顯示在新盤面上)
+// 盤面在計算途中被改掉時,停止進行中的計算(否則舊盤面的結果會顯示在新盤面上)
 function cancelRun(){
   if(!workers)return;
   stopWorkers();
-  $('go').disabled=animating;$('pg').style.width='0';$('st').textContent='已取消(盤面或設定已變更)';
+  $('go').disabled=animating;$('pg').style.width='0';$('st').textContent='已取消(盤面已變更)';
 }
 function run(){
   stopWorkers();
   const bd=board.slice(); // 這次計算用的盤面快照:派工途中不受畫面上的修改影響
   $('go').disabled=true;$('pg').style.width='0';$('st').textContent='計算中…';
-  const H=+$('depth').value,t0=performance.now(),Rv={2:100,3:4,4:1}[H];
+  const H=DEPTH,t0=performance.now(),Rv=1; // Rv:第一步發生連鎖時的取樣次數
   // 等價點擊:同一欄裡上下相鄰且同色的兩格,點哪一格得到的盤面都一樣,只要算一次。
   // 這在盤面一開始沒有任何三連時嚴格成立(有三連時被移動與否會影響消除判定,就不合併)
   const lines3=[];for(let r=0;r<5;r++)for(let c=0;c<5;c++){if(c<3)lines3.push([r*5+c,r*5+c+1,r*5+c+2]);if(r<3)lines3.push([r*5+c,(r+1)*5+c,(r+2)*5+c]);}
@@ -814,7 +808,6 @@ function redrawShot(apply=true){
   document.addEventListener('drop',e=>{e.preventDefault();const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/'));if(f)loadShot(f);});
 })();
 
-$('depth').onchange=()=>{cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='「規劃步數上限」已變更,請重新計算。';render();};
 $('sim').onclick=simulate;
 // 在推薦列表點一列:選擇要模擬的起手點
 $('res').onclick=e=>{
