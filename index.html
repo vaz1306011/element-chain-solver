@@ -117,8 +117,8 @@ function setWeights(w){const s=w.reduce((a,b)=>a+b,0);weights=w.map(x=>x/s);cum=
 function draw(){const r=rng();for(let i=0;i<K;i++)if(r<cum[i])return i;return K-1}
 
 // 重力:把 -1 的空格往上擠,回傳空格位置;moved 標記有位移/新補的格
-function gravity(b,moved,nw){
-  const empties=[];
+function gravity(b,moved,nw,out){
+  const empties=out||[];empties.length=0;
   for(let c=0;c<N;c++){
     let w=N-1;
     for(let r=N-1;r>=0;r--){
@@ -152,17 +152,18 @@ function clearGroups(b,moved,nw){
   for(let i=0;i<CELLS;i++)if(mark[i]){b[i]=-1;total++;}
   return total;
 }
+const emC=[];let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
 function cascade(b,moved,nw){
-  let removed=0,rnd=false;
+  let removed=0;casRnd=false;
   for(;;){
     const n=clearGroups(b,moved,nw);
     if(!n)break;
     removed+=n;moved.fill(0);if(nw)nw.fill(0);
-    const em=gravity(b,moved,nw);
-    for(const i of em)b[i]=draw();
-    rnd=true;
+    const em=gravity(b,moved,nw,emC);
+    for(let i=0;i<em.length;i++)b[em[i]]=draw();
+    casRnd=true;
   }
-  return [removed,rnd];
+  return removed;
 }
 // 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
 function expand(board,idx,R){
@@ -183,26 +184,31 @@ function expand(board,idx,R){
     const S=20;
     for(let s=0;s<S;s++){const f=[];for(let i=0;i<n;i++)f.push(draw());fills.push([1/S,f]);}
   }
-  const map=new Map();
+  // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數)
+  const out=[],map=new Map();
   const add=(p,bd,rm)=>{
-    const key=rm+'|'+bd.join('');
-    const e=map.get(key);
-    if(e)e.p+=p;else map.set(key,{p,board:Uint8Array.from(bd),removed:rm});
+    let lo=0,hi=0;
+    for(let i=0;i<12;i++)hi=hi*5+bd[i];
+    for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
+    const key=rm*1220703125+lo,e=map.get(key);
+    if(e===undefined){const o={p,board:Uint8Array.from(bd),removed:rm,hi};map.set(key,o);out.push(o);return;}
+    let x=e;while(x.hi!==hi){if(!x.next){const o={p,board:Uint8Array.from(bd),removed:rm,hi};x.next=o;out.push(o);return;}x=x.next;}
+    x.p+=p;
   };
+  const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
   for(const [p,f] of fills){
-    const b2=Int8Array.from(bb),m2=Uint8Array.from(moved0);
+    b2.set(bb);m2.set(moved0);
     for(let i=0;i<n;i++)b2[empties[i]]=f[i];
-    const b3=Int8Array.from(b2),m3=Uint8Array.from(m2);
-    const [rm,rnd]=cascade(b3,m3,Uint8Array.from(nw0));
-    if(!rnd){add(p,b3,1+rm);continue;}
+    b3.set(b2);m3.set(m2);nwb.set(nw0);
+    const rm=cascade(b3,m3,nwb);
+    if(!casRnd){add(p,b3,1+rm);continue;}
     add(p/R,b3,1+rm);
     for(let k=1;k<R;k++){
-      const b4=Int8Array.from(b2),m4=Uint8Array.from(m2);
-      const [rm2]=cascade(b4,m4,Uint8Array.from(nw0));
-      add(p/R,b4,1+rm2);
+      b3.set(b2);m3.set(m2);nwb.set(nw0);
+      add(p/R,b3,1+cascade(b3,m3,nwb));
     }
   }
-  return [...map.values()];
+  return out;
 }
 const memo=new Map();
 // vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數
