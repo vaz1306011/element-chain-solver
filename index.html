@@ -471,7 +471,8 @@ function render(){
       inner=`<span class="rk">#${r}</span>${r===1?'<span class="star">★</span>':''}${NAMES[board[i]]}<small>${x.best.toFixed(2)}</small>`;
     }
     d.innerHTML=inner;
-    d.onclick=()=>{board[i]=brush;cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='盤面已變更,請重新計算。';render();};
+    d.onclick=()=>{if(board[i]===brush&&!simShown)return; // 塗上相同屬性:盤面沒變,保留計算結果
+      board[i]=brush;cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='盤面已變更,請重新計算。';render();};
     g.appendChild(d);
   }
   setSimBtn();
@@ -618,7 +619,7 @@ const pos=i=>`第${Math.floor(i/5)+1}列第${i%5+1}行`;
 // sim:進行中的模擬 {plan:最多模擬幾步, done:已模擬步數, total:累計消除, b:目前的模擬盤面(空格為 -1), next:下一步要點的格子(-1 表示沒有了)}
 let simShown=false,sim=null;
 // 只顯示目前用得到的按鈕(動畫播放中按鈕停用):
-// 平常:「計算」「上傳截圖」,有計算結果時再加「模擬點擊」;
+// 平常:「上傳截圖」,加上「計算」(還沒有這個盤面的結果時)或「模擬點擊」(已有結果時);
 // 模擬中:只留「模擬下一步」(沒有下一步時也隱藏)與「回復版面」
 function setSimBtn(){
   const b=$('sim'),r=$('rst'),inSim=animating||simShown;
@@ -626,7 +627,7 @@ function setSimBtn(){
   b.hidden=inSim?sim.next<0:!results;
   b.disabled=animating;
   r.hidden=!inSim;r.disabled=animating;
-  $('go').hidden=inSim;$('up').hidden=inSim;
+  $('go').hidden=inSim||!!results;$('up').hidden=inSim; // 已有這個盤面的計算結果時不需要再算(盤面一變更 results 就會清掉)
 }
 function restoreBoard(){
   if(animating)return;
