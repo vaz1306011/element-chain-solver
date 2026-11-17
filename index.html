@@ -263,6 +263,10 @@ function expand(board,idx,R){
   const r=outE;outE=null;return r;
 }
 const memo=new Map();
+// 前緣收集模式:COL={H,boards:[]} 時,遇到「剩 COL.H 步」且尚未算過的盤面不計算,只記錄下來並回傳佔位值。
+// 前緣以上的亂數抽取與前緣的值無關,所以收集到的正是之後真正會用到的盤面
+let COL=null;
+const ZEROS=new Float64Array(8);
 // 只剩最後 1 步時只需要「最佳一步的期望消除數」:不必建立、合併後續盤面物件,直接累加機率 × 消除數。
 // 盤面一律是滿的(點一張只空出頂端 1 格),流程與 expand 的單格路徑相同,亂數抽取順序也相同
 function leafVal(board,hi,lo){
@@ -270,6 +274,7 @@ function leafVal(board,hi,lo){
   let sub=memo.get(k1);
   if(sub===undefined){sub=new Map();memo.set(k1,sub);}
   const got=sub.get(hi);if(got!==undefined)return got;
+  if(COL!==null&&COL.H===1){COL.boards.push(board);sub.set(hi,0);return 0;}
   const saved=rs;rs=seedOf(hi,lo,1);
   let best=0;
   for(let a=0;a<CELLS;a++){
@@ -305,6 +310,7 @@ function vals(board,H,hi,lo){
   let sub=memo.get(k1);
   if(sub===undefined){sub=new Map();memo.set(k1,sub);}
   const got=sub.get(hi);if(got)return got;
+  if(COL!==null&&COL.H===H){COL.boards.push(board);sub.set(hi,ZEROS);return ZEROS;}
   const saved=rs;rs=seedOf(hi,lo,H);
   const best=new Float64Array(H+1);
   for(let a=0;a<CELLS;a++){
@@ -320,6 +326,46 @@ function vals(board,H,hi,lo){
   }
   rs=saved;
   sub.set(hi,best);return best;
+}
+// ---- 前緣分工(主執行緒展開前兩步、Worker 計算前緣盤面、主執行緒合併)----
+// 每個盤面的值只取決於盤面本身,所以把前緣盤面交給任何 Worker、以任何順序計算,合併後的結果都相同
+const frontierH=H=>H>=4?H-2:1; // 前緣盤面還剩幾步:4 步時前緣是「兩步後、剩 2 步」,2~3 步時是最後 1 步
+// 主執行緒:收集分析 acts 這些第一步會用到的前緣盤面(已去重),回傳平鋪的 Uint8Array(每盤 25 格)
+function collectFrontier(board,H,acts){
+  memo.clear();COL={H:frontierH(H),boards:[]};
+  let list;
+  try{for(const a of acts){rs=12345+a;analyzeOne(board,H,a);}list=COL.boards;}
+  finally{COL=null;memo.clear();} // 收集時前緣以上算出的是佔位值,全部丟掉
+  const out=new Uint8Array(list.length*CELLS);
+  for(let i=0;i<list.length;i++)out.set(list[i],i*CELLS);
+  return out;
+}
+// Worker:計算一批前緣盤面,每盤回傳 Hf 個值 v[1..Hf]
+function evalBoards(boards,Hf){
+  const n=boards.length/CELLS,out=new Float64Array(n*Hf);
+  for(let i=0;i<n;i++){
+    const b=boards.subarray(i*CELLS,(i+1)*CELLS);
+    let hi=0,lo=0;
+    for(let j=0;j<12;j++)hi=hi*5+b[j];
+    for(let j=12;j<CELLS;j++)lo=lo*5+b[j];
+    if(Hf===1)out[i]=leafVal(b,hi,lo);
+    else{const v=vals(b,Hf,hi,lo);for(let h=1;h<=Hf;h++)out[i*Hf+h-1]=v[h];}
+  }
+  return out;
+}
+// 主執行緒:把 Worker 算好的前緣值放進快取,之後照常呼叫 analyzeOne 就會直接取用
+function putFrontier(boards,Hf,values){
+  const n=boards.length/CELLS;
+  for(let i=0;i<n;i++){
+    let hi=0,lo=0;
+    for(let j=0;j<12;j++)hi=hi*5+boards[i*CELLS+j];
+    for(let j=12;j<CELLS;j++)lo=lo*5+boards[i*CELLS+j];
+    const k1=lo*8+Hf;
+    let sub=memo.get(k1);
+    if(sub===undefined){sub=new Map();memo.set(k1,sub);}
+    if(Hf===1)sub.set(hi,values[i]);
+    else{const v=new Float64Array(Hf+1);for(let h=1;h<=Hf;h++)v[h]=values[i*Hf+h-1];sub.set(hi,v);}
+  }
 }
 // 分析「第一步點 a」的結果;各第一步彼此獨立,可分給不同 Worker 平行計算
 function analyzeOne(board,H,a){
@@ -415,10 +461,10 @@ function showResults(){
   const b=results[order[0]];
   $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),預計規劃 ${b.bestH} 步,期望 ${b.best.toFixed(2)} 張/步。`;
 }
-// 在主執行緒也載入一份引擎,用來產生模擬動畫的每一步
+// 在主執行緒也載入一份引擎:用來產生模擬動畫的每一步,以及計算時展開前兩步、合併 Worker 的結果
 let ENG=null;
 function engine(){
-  if(!ENG)ENG=new Function($('engine').textContent+";return {setIgn:v=>{IGN=v},clearGroups,draw}")();
+  if(!ENG)ENG=new Function($('engine').textContent+";return {setIgn:v=>{IGN=v},setR:v=>{R=v},seed:v=>{rs=v},clearMemo:()=>memo.clear(),clearGroups,draw,analyzeOne,collectFrontier,putFrontier,frontierH}")();
   return ENG;
 }
 // 回傳 steps:clear(消除哪些卡)與 fall(哪些卡下移、哪些新卡從上方掉入)交替
@@ -511,36 +557,59 @@ function run(){
   const bd=board.slice(); // 這次計算用的盤面快照:派工途中不受畫面上的修改影響
   $('go').disabled=true;$('pg').style.width='0';$('st').textContent='計算中…';
   const H=+$('depth').value,t0=performance.now(),Rv={2:100,3:4,4:1}[H];
-  const src=$('engine').textContent+`
-  onmessage=e=>{const d=e.data;R=d.R;IGN=d.ign;rs=12345+d.a;
-   postMessage({a:d.a,r:analyzeOne(Int8Array.from(d.board),d.H,d.a)});};
-  `;
-  const url=workerUrl=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
   // 等價點擊:同一欄裡上下相鄰且同色的兩格,點哪一格得到的盤面都一樣,只要算一次。
   // 這在盤面一開始沒有任何三連時嚴格成立(有三連時被移動與否會影響消除判定,就不合併)
   const lines3=[];for(let r=0;r<5;r++)for(let c=0;c<5;c++){if(c<3)lines3.push([r*5+c,r*5+c+1,r*5+c+2]);if(r<3)lines3.push([r*5+c,(r+1)*5+c,(r+2)*5+c]);}
   const noTriple=lines3.every(([a,b,c])=>!(bd[a]===bd[b]&&bd[b]===bd[c]));
   const srcOf=[];for(let a=0;a<25;a++)srcOf.push(noTriple&&a>=5&&bd[a]===bd[a-5]?srcOf[a-5]:a);
   const tasks=[];for(let a=0;a<25;a++)if(srcOf[a]===a)tasks.push(a);
-  // 以多個 Worker 平行計算,依序領取尚未計算的第一步
-  const nW=Math.max(1,Math.min(25,navigator.hardwareConcurrency||4,tasks.length));
-  const res=new Array(25);let next=0,done=0,failed=false;
-  const feed=w=>{if(next<tasks.length)w.postMessage({board:bd,H,ign:1,R:Rv,a:tasks[next++]});};
+  // 分工方式:主執行緒先展開前兩步,收集所有會用到的「前緣盤面」並去重(不同的第一步常會走到同一個盤面),
+  // 分批交給多個 Worker 計算,最後在主執行緒用同一套程式合併。
+  // 每個盤面的值只取決於盤面本身,所以結果與 Worker 數量、分批方式、完成順序都無關
+  const E=engine();E.setIgn(1);E.setR(Rv);
+  let failed=false;
+  const fail=msg=>{if(failed)return;failed=true;stopWorkers();E.clearMemo();$('go').disabled=animating;$('st').textContent='錯誤:'+msg;};
+  let fb;
+  try{fb=E.collectFrontier(bd,H,tasks);}catch(e){fail(e.message);return;}
+  const Hf=E.frontierH(H),n=fb.length/25;
+  const finish=vals=>{
+    stopWorkers();
+    const res=new Array(25);
+    try{
+      E.putFrontier(fb,Hf,vals);
+      for(const a of tasks){E.seed(12345+a);res[a]=E.analyzeOne(bd,H,a);}
+    }catch(e){fail(e.message);return;}
+    E.clearMemo();
+    for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
+    results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
+    $('go').disabled=animating;$('pg').style.width='100%';
+    $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
+    render();showResults();
+  };
+  // Worker 數量依工作量決定(剩 1 步的盤面很便宜,剩 2 步的約貴 80 倍),每個 Worker 約領 2 批
+  // (實測分得更細並不會更快:同一批裡相鄰的盤面共用較多快取)
+  const nW=Math.max(1,Math.min(navigator.hardwareConcurrency||4,32,Math.ceil(n*(Hf===1?1:80)/2000)));
+  const chunk=Math.max(16,Math.ceil(n/(nW*2))),nChunks=Math.ceil(n/chunk);
+  const src=$('engine').textContent+`
+  onmessage=e=>{const d=e.data;IGN=d.ign;const v=evalBoards(d.boards,d.Hf);postMessage({i:d.i,v},[v.buffer]);};
+  `;
+  const url=workerUrl=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+  const vals=new Float64Array(n*Hf);let next=0,done=0;
+  if(n===0){finish(vals);return;}
+  const feed=w=>{
+    if(next>=nChunks)return;
+    const i=next++,boards=fb.slice(i*chunk*25,Math.min(n,(i+1)*chunk)*25);
+    w.postMessage({i,boards,Hf,ign:1},[boards.buffer]);
+  };
   workers=[];
-  for(let i=0;i<nW;i++){
+  for(let k=0;k<nW;k++){
     const w=new Worker(url);workers.push(w);
     w.onmessage=e=>{
-      res[e.data.a]=e.data.r;done++;
-      $('pg').style.width=(done/tasks.length*100)+'%';
-      if(done<tasks.length){feed(w);return;}
-      stopWorkers();
-      for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
-      results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
-      $('go').disabled=false;$('pg').style.width='100%';
-      $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
-      render();showResults();
+      vals.set(e.data.v,e.data.i*chunk*Hf);done++;
+      $('pg').style.width=(done/nChunks*100)+'%';
+      if(done<nChunks)feed(w);else finish(vals);
     };
-    w.onerror=e=>{if(failed)return;failed=true;stopWorkers();$('go').disabled=false;$('st').textContent='錯誤:'+e.message;};
+    w.onerror=e=>fail(e.message);
     feed(w);
   }
 }
