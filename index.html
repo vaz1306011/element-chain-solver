@@ -15,7 +15,6 @@ h1{font-size:18px;margin:0 0 4px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
 .mut{color:var(--mut);font-size:13px}
 .palette{display:flex;gap:10px;margin:12px 0 14px;padding:10px 12px;align-items:center;flex-wrap:wrap;border:1px dashed var(--line);border-radius:12px}
-.palette::before{content:'筆刷';font-size:12px;color:var(--mut);margin-right:2px}
 .pal{width:44px;height:44px;padding:0;border-radius:50%;border:3px solid transparent;color:#fff;font-weight:800;cursor:pointer;font-size:16px}
 .pal.on{border-color:#fff;box-shadow:0 0 0 2px #0008 inset}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:8px}
@@ -73,7 +72,6 @@ footer a:hover{color:var(--acc)}
 <div class="wrap">
  <div class="panel">
   <h1>元素連鎖計算機</h1>
-  <div class="mut">先選屬性筆刷,再點格子把面板填成和遊戲一致(左上為第 1 列第 1 行)。</div>
   <div class="palette" id="pal"></div>
   <div class="grid" id="grid"></div>
   <div class="row">
