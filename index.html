@@ -117,9 +117,11 @@ function setWeights(w){const s=w.reduce((a,b)=>a+b,0);weights=w.map(x=>x/s);cum=
 function draw(){const r=rng();for(let i=0;i<K;i++)if(r<cum[i])return i;return K-1}
 
 // 重力:把 -1 的空格往上擠,回傳空格位置;moved 標記有位移/新補的格
-function gravity(b,moved,nw,out){
+function gravity(b,moved,nw,out,cols){
   const empties=out||[];empties.length=0;
+  if(cols===undefined)cols=31; // cols:要處理的欄(位元);沒有空格的欄不必處理
   for(let c=0;c<N;c++){
+    if(!((cols>>c)&1))continue;
     let w=N-1;
     for(let r=N-1;r>=0;r--){
       const v=b[r*N+c];
@@ -137,9 +139,19 @@ const TA=new Int8Array(30),TB=new Int8Array(30),TC=new Int8Array(30),TL=new Uint
 {let n=0;
  for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){TA[n]=r*N+c;TB[n]=r*N+c+1;TC[n]=r*N+c+2;TL[n]=1<<r;n++;}
  for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){TA[n]=r*N+c;TB[n]=(r+1)*N+c;TC[n]=(r+2)*N+c;TL[n]=1<<(N+c);n++;}}
-function clearGroups(b,moved,nw){
+// TLIST[ac]:經過 ac(位元,有牌位移的欄)任一欄的三連線。含位移格的 3 連以上段必含一條這樣的三連
+const TLIST=[],COLB=new Uint8Array(CELLS);
+for(let i=0;i<CELLS;i++)COLB[i]=1<<(i%N);
+for(let ac=0;ac<32;ac++){
+  const l=[];
+  for(let t=0;t<30;t++)if((COLB[TA[t]]|COLB[TB[t]]|COLB[TC[t]])&ac)l.push(t);
+  TLIST.push(Uint8Array.from(l));
+}
+let clrCols=0; // 最近一次 clearGroups 實際消除的格子所在的欄(位元)
+function clearGroups(b,moved,nw,ac){
+  const tl=TLIST[ac===undefined?31:ac];
   let lines=0; // 有三連的線;沒有三連的線不可能有 3 張以上的連續段,不必掃
-  for(let t=0;t<30;t++){const x=b[TA[t]];if(x===b[TB[t]]&&x===b[TC[t]])lines|=TL[t];}
+  for(let k=0;k<tl.length;k++){const t=tl[k],x=b[TA[t]];if(x===b[TB[t]]&&x===b[TC[t]])lines|=TL[t];}
   if(lines===0)return 0;
   mark.fill(0);let any=false;
   for(let dir=0;dir<2;dir++){
@@ -157,18 +169,20 @@ function clearGroups(b,moved,nw){
     }
   }
   if(!any)return 0;
-  let total=0;
-  for(let i=0;i<CELLS;i++)if(mark[i]){b[i]=-1;total++;}
+  let total=0,cols=0;
+  for(let i=0;i<CELLS;i++)if(mark[i]){b[i]=-1;total++;cols|=COLB[i];}
+  clrCols=cols;
   return total;
 }
 const emC=[];let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
-function cascade(b,moved,nw){
+function cascade(b,moved,nw,ac){ // ac:一開始有牌位移的欄(位元),之後每輪就是上一輪消除所在的欄
   let removed=0;casRnd=false;
   for(;;){
-    const n=clearGroups(b,moved,nw);
+    const n=clearGroups(b,moved,nw,ac);
     if(!n)break;
     removed+=n;for(let i=0;i<CELLS;i++){moved[i]=0;nw[i]=0;}
-    const em=gravity(b,moved,nw,emC);
+    ac=clrCols;
+    const em=gravity(b,moved,nw,emC,ac);
     for(let i=0;i<em.length;i++)b[em[i]]=draw();
     casRnd=true;
   }
@@ -212,12 +226,12 @@ function addE(p,bd,rm){
 // 補入新牌後有連鎖:以 b2(補牌後的盤面)跑完整 cascade(R>1 時重複抽樣)
 function chain(p,R,idx){
   b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
-  const rm=cascade(b3,m3,nwb);
+  const rm=cascade(b3,m3,nwb,COLB[idx]);
   if(!casRnd){addE(p,b3,1+rm);return;}
   addE(p/R,b3,1+rm);
   for(let k=1;k<R;k++){
     b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
-    addE(p/R,b3,1+cascade(b3,m3,nwb));
+    addE(p/R,b3,1+cascade(b3,m3,nwb,COLB[idx]));
   }
 }
 const PW=[5**11,5**10,5**9,5**8,5**7]; // 前 12 格中第 0~4 格(頂列)的 5 進位權重
@@ -269,7 +283,7 @@ function leafVal(board,hi,lo){
       let hit=baseHit;
       if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
       if(!hit)q+=p;
-      else{b3.set(bb);m3.set(MOVEDM[a]);nwb.set(NWM[a]);q+=p*(1+cascade(b3,m3,nwb));}
+      else{b3.set(bb);m3.set(MOVEDM[a]);nwb.set(NWM[a]);q+=p*(1+cascade(b3,m3,nwb,COLB[a]));}
     }
     if(q>best)best=q;
   }
