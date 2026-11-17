@@ -193,8 +193,8 @@ const emE=[],mapE=new Map();let outE=null;
 // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數 hi/lo)
 function addK(p,bd,rm,hi,lo){
   const key=rm*1220703125+lo,e=mapE.get(key);
-  if(e===undefined){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};mapE.set(key,o);outE.push(o);return;}
-  let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};x.next=o;outE.push(o);return;}x=x.next;}
+  if(e===undefined){const o={p,board:new Uint8Array(bd),removed:rm,hi,lo,next:null};mapE.set(key,o);outE.push(o);return;}
+  let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:new Uint8Array(bd),removed:rm,hi,lo,next:null};x.next=o;outE.push(o);return;}x=x.next;}
   x.p+=p;
 }
 function addE(p,bd,rm){
@@ -263,12 +263,41 @@ function expand(board,idx,R){
   const r=outE;outE=null;return r;
 }
 const memo=new Map();
-// vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數
-function vals(board,H){
-  // 數字 key:後 13 格編成 5 進位整數(再併入 H)當外層 key,前 12 格當內層 key,避免組字串
-  let hi=0,lo=0;
-  for(let i=0;i<12;i++)hi=hi*5+board[i];
-  for(let i=12;i<CELLS;i++)lo=lo*5+board[i];
+// 只剩最後 1 步時只需要「最佳一步的期望消除數」:不必建立、合併後續盤面物件,直接累加機率 × 消除數。
+// 盤面一律是滿的(點一張只空出頂端 1 格),流程與 expand 的單格路徑相同,亂數抽取順序也相同
+function leafVal(board,hi,lo){
+  const k1=lo*8+1;
+  let sub=memo.get(k1);
+  if(sub===undefined){sub=new Map();memo.set(k1,sub);}
+  const got=sub.get(hi);if(got!==undefined)return got;
+  let best=0;
+  for(let a=0;a<CELLS;a++){
+    for(let i=0;i<CELLS;i++)bb[i]=board[i];
+    bb[a]=-1;moved0.fill(0);nw0.fill(0);
+    const c=gravity(bb,moved0,nw0,emE)[0],an=AFFN[a],at=AFFT[a];
+    let baseHit=false;
+    for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
+    let q=0;
+    for(let d=0;d<K;d++){
+      const p=weights[d];
+      if(!(p>0))continue;
+      b2.set(bb);b2[c]=d;
+      let hit=baseHit;
+      if(!hit)for(let j=0;j<at.length;j+=3){const x=b2[at[j]];if(x===b2[at[j+1]]&&x===b2[at[j+2]]){hit=true;break;}}
+      if(!hit)q+=p;
+      else{b3.set(b2);m3.set(moved0);nwb.set(nw0);q+=p*(1+cascade(b3,m3,nwb));}
+    }
+    if(q>best)best=q;
+  }
+  sub.set(hi,best);return best;
+}
+// vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數(hi/lo:盤面的數字編碼,呼叫端已算好時帶入)
+function vals(board,H,hi,lo){
+  if(hi===undefined){ // 數字 key:後 13 格編成 5 進位整數(再併入 H)當外層 key,前 12 格當內層 key,避免組字串
+    hi=0;lo=0;
+    for(let i=0;i<12;i++)hi=hi*5+board[i];
+    for(let i=12;i<CELLS;i++)lo=lo*5+board[i];
+  }
   const k1=lo*8+H;
   let sub=memo.get(k1);
   if(sub===undefined){sub=new Map();memo.set(k1,sub);}
@@ -278,7 +307,8 @@ function vals(board,H){
     const outs=expand(board,a,1);
     const q=new Float64Array(H+1);
     for(const o of outs){
-      const ch=H>1?vals(o.board,H-1):null;
+      if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));continue;}
+      const ch=H>1?vals(o.board,H-1,o.hi,o.lo):null;
       for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
     }
     for(let h=1;h<=H;h++)if(q[h]>best[h])best[h]=q[h];
@@ -290,8 +320,11 @@ function analyzeOne(board,H,a){
   const outs=expand(board,a,R);
   const q=new Float64Array(H+1);let pc=0,maxRm=0;
   for(const o of outs){
-    const ch=H>1?vals(o.board,H-1):null;
-    for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
+    if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));}
+    else{
+      const ch=H>1?vals(o.board,H-1,o.hi,o.lo):null;
+      for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
+    }
     if(o.removed>1)pc+=o.p;
     if(o.removed>maxRm)maxRm=o.removed;
   }
