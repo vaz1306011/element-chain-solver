@@ -131,7 +131,6 @@ function gravity(b,moved,nw,out,cols){
   }
   return empties;
 }
-const mark=new Uint8Array(CELLS);
 // 只有橫向或直向連續 3 張以上才算;T/十字/L 是兩條線交會,自然一起消除
 // nw:這一輪「新補進來」的格。IGN 開啟時,完全由新補卡片組成的線不算(只算跟留在盤面上的卡片相連的線)
 // 預先攤平的 30 條三連線(橫 15 + 直 15):先用它快速排除「完全沒有三連」的常見情況
@@ -153,7 +152,7 @@ function clearGroups(b,moved,nw,ac){
   let lines=0; // 有三連的線;沒有三連的線不可能有 3 張以上的連續段,不必掃
   for(let k=0;k<tl.length;k++){const t=tl[k],x=b[TA[t]];if(x===b[TB[t]]&&x===b[TC[t]])lines|=TL[t];}
   if(lines===0)return 0;
-  mark.fill(0);let any=false;
+  let mk=0;
   for(let dir=0;dir<2;dir++){
     for(let l=0;l<N;l++){
       if(!((lines>>(dir*N+l))&1))continue;
@@ -163,14 +162,14 @@ function clearGroups(b,moved,nw,ac){
         if(v<0){i++;continue;}
         let j=i,hm=false,an=true;
         while(j<N){const p=dir?j*N+l:l*N+j;if(b[p]!==v)break;if(moved[p])hm=true;if(!(nw&&nw[p]))an=false;j++;}
-        if(j-i>=3&&hm&&!(IGN&&an)){any=true;for(let k=i;k<j;k++)mark[dir?k*N+l:l*N+k]=1;}
+        if(j-i>=3&&hm&&!(IGN&&an)){for(let k=i;k<j;k++)mk|=1<<(dir?k*N+l:l*N+k);}
         i=j;
       }
     }
   }
-  if(!any)return 0;
+  if(mk===0)return 0;
   let total=0,cols=0;
-  for(let i=0;i<CELLS;i++)if(mark[i]){b[i]=-1;total++;cols|=COLB[i];}
+  for(let i=0;i<CELLS;i++)if((mk>>i)&1){b[i]=-1;total++;cols|=COLB[i];}
   clrCols=cols;
   return total;
 }
