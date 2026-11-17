@@ -488,27 +488,26 @@ function loadState(){
     if(!d||!Array.isArray(d.board)||d.board.length!==25||!d.board.every(v=>Number.isInteger(v)&&v>=0&&v<5))return false;
     board=d.board;
     const r=d.results;
-    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&x.q.length===DEPTH+1&&Number.isFinite(x.best)&&Number.isFinite(x.bestH)))results=r; // 舊版以其他步數算出的結果不還原
+    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&x.q.length===DEPTH+1&&Number.isFinite(x.best)))results=r; // 舊版以其他步數算出的結果不還原
     return true;
   }catch(e){return false;}
 }
 function showResults(){
   const order=rank();const top=results[order[0]].best||1;
-  let h='<table><tr><th>#</th><th>位置</th><th>屬性</th><th>期望分數<br>消除/步</th><th>最佳步數</th><th>第 1 步連鎖率</th></tr>';
+  let h='<table><tr><th>#</th><th>位置</th><th>屬性</th><th>期望分數<br>消除/步</th></tr>';
   order.slice(0,10).forEach((idx,k)=>{
     const x=results[idx],r=Math.floor(idx/5)+1,c=idx%5+1;
     const per=x.q.slice(1).map((v,i)=>`<b>${i+1}步</b> ${(v/(i+1)).toFixed(2)}`).join(' · ');
     const cls=`pick${idx===simTarget()?' sel':''}`;
     h+=`<tr class="${cls}" data-idx="${idx}"><td>${k+1}</td><td>第${r}列 第${c}行</td><td><span class="cell c${board[idx]}" style="display:inline-flex;width:28px;height:28px;font-size:14px;border-width:0">${NAMES[board[idx]]}</span></td>
-    <td><b>${x.best.toFixed(2)}</b><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></td>
-    <td>${x.bestH}</td><td>${(x.pc*100).toFixed(0)}%</td></tr>
-    <tr class="${cls}" data-idx="${idx}"><td></td><td colspan="5" class="hs" style="text-align:left">${per}</td></tr>`;
+    <td><b>${x.best.toFixed(2)}</b><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></td></tr>
+    <tr class="${cls}" data-idx="${idx}"><td></td><td colspan="3" class="hs" style="text-align:left">${per}</td></tr>`;
   });
   h+='</table><div class="mut" style="margin-top:6px">點任一列可選擇「模擬點擊」要模擬的起手點(盤面上以虛線框標示)。</div>';
   $('res').innerHTML=h;
   setSimBtn();
   const b=results[order[0]];
-  $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),預計規劃 ${b.bestH} 步,期望 ${b.best.toFixed(2)} 張/步。`;
+  $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),期望 ${b.best.toFixed(2)} 張/步。`;
 }
 // 在主執行緒也載入一份引擎:用來產生模擬動畫的每一步,以及計算時展開前兩步、合併 Worker 的結果
 let ENG=null;
@@ -616,24 +615,27 @@ async function animate(start,idx){
 }
 const pos=i=>`第${Math.floor(i/5)+1}列第${i%5+1}行`;
 // 模擬狀態。simShown:格子目前顯示的是模擬後的畫面(盤面與排名結果都維持不變,模擬只是預覽)。
-// sim:進行中的模擬 {plan:規劃步數, done:已模擬步數, total:累計消除, b:目前的模擬盤面(空格為 -1), next:下一步要點的格子(-1 表示沒有了)}
+// sim:進行中的模擬 {plan:最多模擬幾步, done:已模擬步數, total:累計消除, b:目前的模擬盤面(空格為 -1), next:下一步要點的格子(-1 表示沒有了)}
 let simShown=false,sim=null;
-function setSimBtn(){ // 有計算結果(或正顯示模擬畫面)才能按;動畫播放中停用
-  const b=$('sim'),r=$('rst'),multi=simShown&&sim&&sim.plan>1;
-  // 規劃多步時:模擬後原按鈕變成「模擬下一步」,另外出現「回復版面」;只規劃 1 步時,原按鈕直接變成「回復版面」
-  b.textContent=multi?'模擬下一步':simShown?'回復版面':'模擬點擊';
-  b.disabled=animating||(!results&&!simShown)||(multi&&sim.next<0);
-  r.hidden=!multi;r.disabled=animating;
+// 只顯示目前用得到的按鈕(動畫播放中按鈕停用):
+// 平常:「計算」「上傳截圖」,有計算結果時再加「模擬點擊」;
+// 模擬中:只留「模擬下一步」(沒有下一步時也隱藏)與「回復版面」
+function setSimBtn(){
+  const b=$('sim'),r=$('rst'),inSim=animating||simShown;
+  b.textContent=inSim?'模擬下一步':'模擬點擊';
+  b.hidden=inSim?!animating&&sim.next<0:!results;
+  b.disabled=animating;
+  r.hidden=!inSim;r.disabled=animating;
+  $('go').hidden=inSim;$('up').hidden=inSim;
 }
 function restoreBoard(){
   if(animating)return;
   render();$('hint').textContent='已回復為你的盤面,可以再次模擬。';
 }
 const NOFILL='模擬不補新牌,只看盤面上現有的牌;你的盤面沒有改變。';
-async function simulate(){ // 第一次按:模擬選定的起手點;規劃多步時,之後每按一次模擬下一步
+async function simulate(){ // 第一次按:模擬選定的起手點;之後每按一次模擬下一步(最多 DEPTH 步)
   if(animating)return;
-  if(simShown&&!(sim&&sim.plan>1)){restoreBoard();return;}
-  if(!simShown){const idx=simTarget();sim={plan:results[idx].bestH,done:0,total:0,b:board.slice(),next:idx};}
+  if(!simShown)sim={plan:DEPTH,done:0,total:0,b:board.slice(),next:simTarget()};
   if(sim.next<0)return;
   const cur=sim,idx=cur.next;
   const r=await animate(cur.b,idx);
@@ -641,10 +643,9 @@ async function simulate(){ // 第一次按:模擬選定的起手點;規劃多步
   const left=cur.plan-cur.done;
   cur.next=left>0?bestNext(cur.b,left).idx:-1;
   simShown=true;setSimBtn();
-  const head=cur.plan>1?`模擬第 ${cur.done}/${cur.plan} 步:`:'模擬:';
-  let msg=`${head}點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪)`+(cur.plan>1?`,累計 ${cur.total} 張。`:'。');
+  let msg=`模擬第 ${cur.done}/${cur.plan} 步:點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪),累計 ${cur.total} 張。`;
   if(cur.next>=0)msg+=`下一步會點 ${pos(cur.next)}(${NAMES[cur.b[cur.next]]}),按「模擬下一步」繼續。`;
-  else if(cur.plan>1)msg+=left>0?'現有的牌已經湊不出連線,接下來要看補進來的牌,請輸入新盤面重算。':`規劃的 ${cur.plan} 步已模擬完。`;
+  else msg+=left>0?'現有的牌已經湊不出連線,接下來要看補進來的牌,請輸入新盤面重算。':`規劃的 ${cur.plan} 步已模擬完。`;
   $('hint').textContent=msg+NOFILL;
 }
 function stopWorkers(){
@@ -687,7 +688,7 @@ function run(){
     E.clearMemo();
     for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
     simIdx=null;
-    results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
+    results=res.map(x=>{let bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs)bs=s;}x.best=bs;return x;}); // 分數 = 規劃 1~H 步中 期望/步數 最高者
     $('go').disabled=animating;$('pg').style.width='100%';
     $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
     render();showResults();
