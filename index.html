@@ -445,7 +445,7 @@ function run(){
   `;
   const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
   // 以多個 Worker 平行計算,依序領取尚未計算的第一步
-  const nW=Math.max(1,Math.min(8,(navigator.hardwareConcurrency||4)-1,25));
+  const nW=Math.max(1,Math.min(25,navigator.hardwareConcurrency||4));
   const res=new Array(25);let next=0,done=0,failed=false;
   const feed=w=>{if(next<25)w.postMessage({board,H,ign:1,R:Rv,a:next++});};
   workers=[];
