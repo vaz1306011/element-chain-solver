@@ -165,6 +165,15 @@ function cascade(b,moved,nw){
   }
   return removed;
 }
+// 預先算好:點下 idx 後可能新形成三連的線(經過同欄、該列以上的格子),以平的 [a,b,c,...] 存放
+const AFF=[];
+for(let idx=0;idx<CELLS;idx++){
+  const col=idx%N,row=(idx/N)|0,list=[];
+  const touch=p=>p%N===col&&((p/N)|0)<=row;
+  for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){const a=r*N+c;if(touch(a)||touch(a+1)||touch(a+2))list.push(a,a+1,a+2);}
+  for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){const a=r*N+c;if(touch(a)||touch(a+N)||touch(a+2*N))list.push(a,a+N,a+2*N);}
+  AFF.push(Int8Array.from(list));
+}
 // 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
 function expand(board,idx,R){
   const b=Uint8Array.from(board);const bb=new Int8Array(CELLS);for(let i=0;i<CELLS;i++)bb[i]=b[i];
@@ -195,10 +204,16 @@ function expand(board,idx,R){
     let x=e;while(x.hi!==hi){if(!x.next){const o={p,board:Uint8Array.from(bd),removed:rm,hi};x.next=o;out.push(o);return;}x=x.next;}
     x.p+=p;
   };
+  const aff=AFF[idx];
   const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
   for(const [p,f] of fills){
     b2.set(bb);m2.set(moved0);
     for(let i=0;i<n;i++)b2[empties[i]]=f[i];
+    if(n===1){ // 快速路徑:受影響的線都沒湊成三連 => 沒有連鎖,結果就是 b2
+      let hit=false;
+      for(let j=0;j<aff.length;j+=3){const x=b2[aff[j]];if(x===b2[aff[j+1]]&&x===b2[aff[j+2]]){hit=true;break;}}
+      if(!hit){add(p,b2,1);continue;}
+    }
     b3.set(b2);m3.set(m2);nwb.set(nw0);
     const rm=cascade(b3,m3,nwb);
     if(!casRnd){add(p,b3,1+rm);continue;}
