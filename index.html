@@ -116,55 +116,38 @@ function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a
 function setWeights(w){const s=w.reduce((a,b)=>a+b,0);weights=w.map(x=>x/s);cum=[];let c=0;for(const x of weights){c+=x;cum.push(c)}}
 function draw(){const r=rng();for(let i=0;i<K;i++)if(r<cum[i])return i;return K-1}
 
-// 重力:把 -1 的空格往上擠,回傳空格位置;moved 標記有位移/新補的格
-function gravity(b,moved,nw,out,cols){
-  const empties=out||[];empties.length=0;
-  if(cols===undefined)cols=31; // cols:要處理的欄(位元);沒有空格的欄不必處理
-  for(let c=0;c<N;c++){
-    if(!((cols>>c)&1))continue;
-    let w=N-1;
-    for(let r=N-1;r>=0;r--){
-      const v=b[r*N+c];
-      if(v>=0){ if(w!==r){b[w*N+c]=v;moved[w*N+c]=1;} w--; }
-    }
-    for(let r=w;r>=0;r--){b[r*N+c]=-1;moved[r*N+c]=1;if(nw)nw[r*N+c]=1;empties.push(r*N+c);}
-  }
-  return empties;
-}
 // 只有橫向或直向連續 3 張以上才算;T/十字/L 是兩條線交會,自然一起消除
 // nw:這一輪「新補進來」的格。IGN 開啟時,完全由新補卡片組成的線不算(只算跟留在盤面上的卡片相連的線)
 const COLB=new Uint8Array(CELLS); // 各格所在欄的位元
 for(let i=0;i<CELLS;i++)COLB[i]=1<<(i%N);
-let clrCols=0; // 最近一次 clearGroups 實際消除的格子所在的欄(位元)
-// 位元遮罩版三連檢測:每種顏色一個 25 位元遮罩(第 i 位 = 第 i 格),位移再 AND 一次找出所有三連
-const CM=new Int32Array(5),ROWM=[],COLM=[];
-for(let r=0;r<N;r++)ROWM.push(31<<(r*N));
-for(let c=0;c<N;c++){let m=0;for(let r=0;r<N;r++)m|=1<<(r*N+c);COLM.push(m);}
-let HST=0;for(let r=0;r<N;r++)HST|=7<<(r*N); // 橫向三連的起點只能在第 0~2 欄
-function clearGroups(b,moved,nw){
+let clrCols=0; // 最近一次 clearMasks 實際消除的格子所在的欄(位元)
+// 全部用 25 位元遮罩處理:每種顏色一個遮罩(第 i 位 = 第 i 格),mv = 有位移/新補的格,nwm = 新補的格
+let HST=0,NC0=0,NC4=0; // 橫向三連起點只能在第 0~2 欄;NC0/NC4:非第 0 欄/非第 4 欄的格(避免位移時跨列)
+for(let r=0;r<N;r++){HST|=7<<(r*N);NC0|=30<<(r*N);NC4|=15<<(r*N);}
+const CM=new Int32Array(5);
+function clearMasks(b,mv,nwm){
   CM[0]=0;CM[1]=0;CM[2]=0;CM[3]=0;CM[4]=0;
-  for(let i=0;i<CELLS;i++)CM[b[i]]|=1<<i;
-  let ha=0,va=0;
-  for(let k=0;k<5;k++){const m=CM[k];ha|=m&(m>>1)&(m>>2);va|=m&(m>>N)&(m>>(2*N));}
-  ha&=HST;
-  let lines=0; // 有三連的線;沒有三連的線不可能有 3 張以上的連續段,不必掃
-  if(ha|va){
-    for(let r=0;r<N;r++)if(ha&ROWM[r])lines|=1<<r;
-    for(let c=0;c<N;c++)if(va&COLM[c])lines|=1<<(N+c);
-  }
-  if(lines===0)return 0;
+  for(let i=0;i<CELLS;i++)CM[b[i]]|=1<<i; // 盤面上的 -1(空格)不屬於任何顏色
+  const old=IGN?~nwm:-1; // 非新補的格;IGN 開啟時,完全由新補卡片組成的線不算
   let mk=0;
-  for(let dir=0;dir<2;dir++){
-    for(let l=0;l<N;l++){
-      if(!((lines>>(dir*N+l))&1))continue;
-      let i=0;
-      while(i<N){
-        const p0=dir?i*N+l:l*N+i,v=b[p0];
-        if(v<0){i++;continue;}
-        let j=i,hm=false,an=true;
-        while(j<N){const p=dir?j*N+l:l*N+j;if(b[p]!==v)break;if(moved[p])hm=true;if(!(nw&&nw[p]))an=false;j++;}
-        if(j-i>=3&&hm&&!(IGN&&an)){for(let k=i;k<j;k++)mk|=1<<(dir?k*N+l:l*N+k);}
-        i=j;
+  for(let k=0;k<5;k++){
+    const m=CM[k];
+    const hs=m&(m>>1)&(m>>2)&HST,vs=m&(m>>N)&(m>>(2*N));
+    // 三連起點展開成「連續 3 張以上的段」的所有格,再用位移擴散找出整段(段必須含位移格、且(IGN 時)含舊牌)
+    if(hs){
+      const th=hs|(hs<<1)|(hs<<2);
+      let x=th&mv,y=th&old;
+      if(x&&y){
+        for(let it=0;it<4;it++){x|=(((x<<1)&NC0)|((x>>1)&NC4))&th;y|=(((y<<1)&NC0)|((y>>1)&NC4))&th;}
+        mk|=x&y;
+      }
+    }
+    if(vs){
+      const tv=vs|(vs<<N)|(vs<<(2*N));
+      let x=tv&mv,y=tv&old;
+      if(x&&y){
+        for(let it=0;it<4;it++){x|=((x<<N)|(x>>N))&tv;y|=((y<<N)|(y>>N))&tv;}
+        mk|=x&y;
       }
     }
   }
@@ -174,23 +157,29 @@ function clearGroups(b,moved,nw){
   clrCols=cols;
   return total;
 }
-const emC=[];let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
-function cascade(b,moved,nw,ac){ // ac:一開始有牌位移的欄(位元),之後每輪就是上一輪消除所在的欄
+// 給主執行緒的模擬動畫用:以陣列表示 moved/nw(盤面可含 -1 空格)
+function clearGroups(b,moved,nw){
+  let mv=0,nwm=0;
+  for(let i=0;i<CELLS;i++){if(moved[i])mv|=1<<i;if(nw&&nw[i])nwm|=1<<i;}
+  return clearMasks(b,mv,nwm);
+}
+let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
+// 連鎖:反覆「消除 → 重力+補牌」直到沒有可消除的。ac:一開始有牌位移的欄(位元),之後每輪就是上一輪消除所在的欄。
+// 重力與補牌合併成一次掃描:各欄由左到右、每欄由下往上補(抽牌順序固定)
+function cascade(b,mv,nwm,ac){
   let removed=0;casRnd=false;
   for(;;){
-    const n=clearGroups(b,moved,nw);
+    const n=clearMasks(b,mv,nwm);
     if(!n)break;
-    removed+=n;for(let i=0;i<CELLS;i++){moved[i]=0;nw[i]=0;}
-    ac=clrCols;
-    // 重力與補牌合併成一次掃描:各欄由左到右、每欄由下往上補,抽牌順序與先重力再補牌相同
+    removed+=n;mv=0;nwm=0;ac=clrCols;
     for(let c=0;c<N;c++){
       if(!((ac>>c)&1))continue;
       let w=N-1;
       for(let r=N-1;r>=0;r--){
         const v=b[r*N+c];
-        if(v>=0){ if(w!==r){b[w*N+c]=v;moved[w*N+c]=1;} w--; }
+        if(v>=0){ if(w!==r){b[w*N+c]=v;mv|=1<<(w*N+c);} w--; }
       }
-      for(let r=w;r>=0;r--){const q=r*N+c;b[q]=draw();moved[q]=1;nw[q]=1;}
+      for(let r=w;r>=0;r--){const q=r*N+c;b[q]=draw();mv|=1<<q;nwm|=1<<q;}
     }
     casRnd=true;
   }
@@ -211,12 +200,12 @@ for(let idx=0;idx<CELLS;idx++){
 // 每個點擊位置固定的「有位移的格」(MOVEDM)與「新補的格」(NWM)預先算好,cascade 以它們為起點
 const MOVEDM=[],NWM=[];
 for(let idx=0;idx<CELLS;idx++){
-  const col=idx%N,row=(idx/N)|0,m=new Uint8Array(CELLS),n=new Uint8Array(CELLS);
-  for(let r=0;r<=row;r++)m[r*N+col]=1;
-  n[col]=1;MOVEDM.push(m);NWM.push(n);
+  const col=idx%N,row=(idx/N)|0;let m=0;
+  for(let r=0;r<=row;r++)m|=1<<(r*N+col);
+  MOVEDM.push(m);NWM.push(1<<col);
 }
 // 暫存緩衝區與合併用的 Map 提到外面重複使用(expand 不會遞迴呼叫自己)
-const bb=new Int8Array(CELLS),b2=new Int8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
+const bb=new Int8Array(CELLS),b2=new Int8Array(CELLS),b3=new Int8Array(CELLS);
 const mapE=new Map();let outE=null;
 // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數 hi/lo)
 function addK(p,bd,rm,hi,lo){
@@ -233,13 +222,13 @@ function addE(p,bd,rm){
 }
 // 補入新牌後有連鎖:以 b2(補牌後的盤面)跑完整 cascade(R>1 時重複抽樣)
 function chain(p,R,idx){
-  b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
-  const rm=cascade(b3,m3,nwb,COLB[idx]);
+  b3.set(b2);
+  const rm=cascade(b3,MOVEDM[idx],NWM[idx],COLB[idx]);
   if(!casRnd){addE(p,b3,1+rm);return;}
   addE(p/R,b3,1+rm);
   for(let k=1;k<R;k++){
-    b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
-    addE(p/R,b3,1+cascade(b3,m3,nwb,COLB[idx]));
+    b3.set(b2);
+    addE(p/R,b3,1+cascade(b3,MOVEDM[idx],NWM[idx],COLB[idx]));
   }
 }
 const PW=[5**11,5**10,5**9,5**8,5**7]; // 前 12 格中第 0~4 格(頂列)的 5 進位權重
@@ -291,7 +280,7 @@ function leafVal(board,hi,lo){
       let hit=baseHit;
       if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
       if(!hit)q+=p;
-      else{b3.set(bb);m3.set(MOVEDM[a]);nwb.set(NWM[a]);q+=p*(1+cascade(b3,m3,nwb,COLB[a]));}
+      else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a],COLB[a]));}
     }
     if(q>best)best=q;
   }
