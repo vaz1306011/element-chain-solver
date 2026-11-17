@@ -72,7 +72,7 @@ footer a:hover{color:var(--acc)}
   <div class="grid" id="grid"></div>
   <div class="row">
    <button class="btn" id="go">計算</button>
-   <button class="btn sec" id="sim" disabled>模擬點擊</button>
+   <button class="btn sec" id="sim" disabled>👆 模擬點擊</button>
    <button class="btn sec" id="rst" hidden>回復版面</button>
    <button class="btn sec" id="up">📷 上傳截圖</button>
    <input type="file" id="file" accept="image/*" hidden>
@@ -600,6 +600,7 @@ async function animate(start,idx){
   const place=(el,row,col)=>{el.style.setProperty('--r',row);el.style.setProperty('--c',col);};
   const mk=(color,row,col)=>{const el=document.createElement('div');el.className='cell tile c'+color;el.textContent=NAMES[color];place(el,row,col);g.appendChild(el);return el;};
   start.forEach((c,i)=>{if(c>=0)els.set(i,mk(c,Math.floor(i/5),i%5));});
+  els.get(idx).classList.add('pk'); // 這一步要點的牌標上 👆
   $('hint').textContent=`點擊 ${pos(idx)}(${NAMES[start[idx]]})…`;
   let cum=0;
   await sleep(350*sp);
@@ -633,7 +634,7 @@ let simShown=false,sim=null;
 // 模擬中:只留「模擬下一步」(沒有下一步時也隱藏)與「回復版面」
 function setSimBtn(){
   const b=$('sim'),r=$('rst'),inSim=animating||simShown;
-  b.textContent=inSim?'模擬下一步':'模擬點擊';
+  b.textContent=inSim?'👆 模擬下一步':'👆 模擬點擊';
   b.hidden=inSim?sim.next<0:!results;
   b.disabled=animating;
   r.hidden=!inSim;
@@ -654,6 +655,11 @@ async function simulate(){ // 第一次按:模擬選定的起手點;之後每按
   if(!r)return; // 動畫被中斷(已回復版面或盤面已變更)
   cur.b=r.final;cur.done++;cur.total+=r.total;
   simShown=true;setSimBtn();
+  if(cur.next>=0){ // 在模擬後的畫面上,把下一步預定要點的牌標上 👆
+    const nr=Math.floor(cur.next/5),nc=cur.next%5;
+    const t=[...$('grid').children].find(el=>+el.style.getPropertyValue('--r')===nr&&+el.style.getPropertyValue('--c')===nc);
+    if(t)t.classList.add('pk');
+  }
   let msg=`模擬第 ${cur.done}/${cur.plan} 步:點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪),累計 ${cur.total} 張。`;
   if(cur.next>=0)msg+=`下一步會點 ${pos(cur.next)}(${NAMES[cur.b[cur.next]]}),按「模擬下一步」繼續。`;
   else msg+=left>0?'現有的牌已經湊不出連線,接下來要看補進來的牌,請輸入新盤面重算。':`規劃的 ${cur.plan} 步已模擬完。`;
