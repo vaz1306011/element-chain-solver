@@ -157,7 +157,7 @@ function clearMasks(b,mv,nwm){
   }
   if(mk===0)return 0;
   let total=0,cols=0;
-  for(let i=0;i<CELLS;i++)if((mk>>i)&1){b[i]=-1;total++;cols|=COLB[i];}
+  for(let m=mk;m!==0;m&=m-1){const i=31-Math.clz32(m&-m);b[i]=-1;total++;cols|=COLB[i];} // 只走訪被標記的格
   clrCols=cols;
   return total;
 }
