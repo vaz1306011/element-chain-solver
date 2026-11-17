@@ -565,16 +565,20 @@ function dropSim(start,idx){
   }
   return {b,total};
 }
-// 模擬的下一步:不補牌、只看盤面上現有的牌,在剩下的 m 步內能消除最多張的點法,回傳第一下要點的格子(沒有牌可點時 idx 為 -1)
+// 模擬的下一步:不補牌、只看盤面上現有的牌,在剩下的 m 步內「額外消除」(被點的那張以外)最多的點法,回傳第一下要點的格子。
+// 點法一律結束在有額外消除的那一步(前面可以是只消 1 張的佈局步,後面不接只消 1 張的步);
+// 額外消除相同時取步數較少的。現有的牌已經湊不出任何連線時 idx 為 -1。
+// extra:額外消除張數,steps:這個點法共幾步
 function bestNext(b,m){
-  let best=-1,idx=-1;
+  let extra=0,steps=0,idx=-1;
   for(let i=0;i<25;i++){
     if(b[i]<0)continue;
     const r=dropSim(b,i);
-    const v=r.total+(m>1?Math.max(0,bestNext(r.b,m-1).total):0);
-    if(v>best){best=v;idx=i;}
+    let e=r.total-1,s=e>0?1:0;
+    if(m>1){const n=bestNext(r.b,m-1);if(n.extra>0){e+=n.extra;s=1+n.steps;}}
+    if(e>extra||(e>0&&e===extra&&s<steps)){extra=e;steps=s;idx=i;}
   }
-  return {idx,total:best};
+  return {idx,extra,steps};
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let animating=false;
@@ -640,7 +644,7 @@ async function simulate(){ // 第一次按:模擬選定的起手點;規劃多步
   const head=cur.plan>1?`模擬第 ${cur.done}/${cur.plan} 步:`:'模擬:';
   let msg=`${head}點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪)`+(cur.plan>1?`,累計 ${cur.total} 張。`:'。');
   if(cur.next>=0)msg+=`下一步會點 ${pos(cur.next)}(${NAMES[cur.b[cur.next]]}),按「模擬下一步」繼續。`;
-  else if(cur.plan>1)msg+=left>0?'盤面上已經沒有牌可點。':`規劃的 ${cur.plan} 步已模擬完。`;
+  else if(cur.plan>1)msg+=left>0?'現有的牌已經湊不出連線,接下來要看補進來的牌,請輸入新盤面重算。':`規劃的 ${cur.plan} 步已模擬完。`;
   $('hint').textContent=msg+NOFILL;
 }
 function stopWorkers(){
