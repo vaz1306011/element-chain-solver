@@ -185,11 +185,17 @@ for(let idx=0;idx<CELLS;idx++){
   for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){const a=r*N+c;push(a,a+N,a+2*N);}
   AFFT.push(Int8Array.from(lt));AFFN.push(Int8Array.from(ln));
 }
-// 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
+// 點下 idx:同欄該列以上整段下移一格,頂端(格 idx%N)補 1 張新牌。盤面一律是滿的,所以每次只空出 1 格。
+// 每個點擊位置固定的「有位移的格」(MOVEDM)與「新補的格」(NWM)預先算好,cascade 以它們為起點
+const MOVEDM=[],NWM=[];
+for(let idx=0;idx<CELLS;idx++){
+  const col=idx%N,row=(idx/N)|0,m=new Uint8Array(CELLS),n=new Uint8Array(CELLS);
+  for(let r=0;r<=row;r++)m[r*N+col]=1;
+  n[col]=1;MOVEDM.push(m);NWM.push(n);
+}
 // 暫存緩衝區與合併用的 Map 提到外面重複使用(expand 不會遞迴呼叫自己)
-const bb=new Int8Array(CELLS),moved0=new Uint8Array(CELLS),nw0=new Uint8Array(CELLS);
-const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
-const emE=[],mapE=new Map();let outE=null;
+const bb=new Int8Array(CELLS),b2=new Int8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
+const mapE=new Map();let outE=null;
 // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數 hi/lo)
 function addK(p,bd,rm,hi,lo){
   const key=rm*1220703125+lo,e=mapE.get(key);
@@ -203,62 +209,40 @@ function addE(p,bd,rm){
   for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
   addK(p,bd,rm,hi,lo);
 }
-// 補入 fill 後跑完整 cascade(R>1 時重複抽樣)
-function chain(p,R){
-  b3.set(b2);m3.set(m2);nwb.set(nw0);
+// 補入新牌後有連鎖:以 b2(補牌後的盤面)跑完整 cascade(R>1 時重複抽樣)
+function chain(p,R,idx){
+  b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
   const rm=cascade(b3,m3,nwb);
   if(!casRnd){addE(p,b3,1+rm);return;}
   addE(p/R,b3,1+rm);
   for(let k=1;k<R;k++){
-    b3.set(b2);m3.set(m2);nwb.set(nw0);
+    b3.set(b2);m3.set(MOVEDM[idx]);nwb.set(NWM[idx]);
     addE(p/R,b3,1+cascade(b3,m3,nwb));
   }
 }
 const PW=[5**11,5**10,5**9,5**8,5**7]; // 前 12 格中第 0~4 格(頂列)的 5 進位權重
+// 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
 function expand(board,idx,R){
-  for(let i=0;i<CELLS;i++)bb[i]=board[i];
-  bb[idx]=-1;moved0.fill(0);nw0.fill(0);
-  const empties=gravity(bb,moved0,nw0,emE),n=empties.length;
+  bb.set(board);
+  const c=idx%N,an=AFFN[idx],at=AFFT[idx];
+  for(let i=idx;i>=N;i-=N)bb[i]=bb[i-N];
   outE=[];mapE.clear();
-  if(n===1){
-    // 點一張牌只空出頂端 1 格:不經過該格的受影響線與補入顏色無關,只需判斷一次;
-    // 經過該格的線(最多 4 條)才隨顏色檢查。沒有連鎖時結果就是 b2,key 由基底盤面增量計算
-    const c=empties[0],an=AFFN[idx],at=AFFT[idx];
-    let baseHit=false;
-    for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
-    bb[c]=0;
-    let hi0=0,lo0=0;
-    for(let i=0;i<12;i++)hi0=hi0*5+bb[i];
-    for(let i=12;i<CELLS;i++)lo0=lo0*5+bb[i];
-    for(let d=0;d<K;d++){
-      const p=weights[d];
-      if(!(p>0))continue;
-      b2.set(bb);m2.set(moved0);b2[c]=d;
-      let hit=baseHit;
-      if(!hit)for(let j=0;j<at.length;j+=3){const x=b2[at[j]];if(x===b2[at[j+1]]&&x===b2[at[j+2]]){hit=true;break;}}
-      if(!hit)addK(p,b2,1,hi0+d*PW[c],lo0);
-      else chain(p,R);
-    }
-    const r=outE;outE=null;return r;
-  }
-  if(n<=2){
-    const tot=Math.pow(K,n);
-    for(let code=0;code<tot;code++){
-      let p=1,x=code;
-      for(let i=0;i<n;i++){const d=x%K;x=(x/K)|0;p*=weights[d];}
-      if(!(p>0))continue;
-      b2.set(bb);m2.set(moved0);x=code;
-      for(let i=0;i<n;i++){b2[empties[i]]=x%K;x=(x/K)|0;}
-      chain(p,R);
-    }
-  }else{
-    const S=20,fl=[]; // 先抽完全部樣本再逐一處理(維持原本的亂數順序)
-    for(let s=0;s<S*n;s++)fl.push(draw());
-    for(let s=0;s<S;s++){
-      b2.set(bb);m2.set(moved0);
-      for(let i=0;i<n;i++)b2[empties[i]]=fl[s*n+i];
-      chain(1/S,R);
-    }
+  // 不經過頂端新牌格的受影響線與補入顏色無關,只需判斷一次;經過該格的線(最多 4 條)才隨顏色檢查。
+  // 沒有連鎖時結果就是 bb,key 由基底盤面增量計算
+  let baseHit=false;
+  for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
+  bb[c]=0;
+  let hi0=0,lo0=0;
+  for(let i=0;i<12;i++)hi0=hi0*5+bb[i];
+  for(let i=12;i<CELLS;i++)lo0=lo0*5+bb[i];
+  for(let d=0;d<K;d++){
+    const p=weights[d];
+    if(!(p>0))continue;
+    bb[c]=d;
+    let hit=baseHit;
+    if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
+    if(!hit)addK(p,bb,1,hi0+d*PW[c],lo0);
+    else{b2.set(bb);chain(p,R,idx);}
   }
   const r=outE;outE=null;return r;
 }
@@ -272,20 +256,20 @@ function leafVal(board,hi,lo){
   const got=sub.get(hi);if(got!==undefined)return got;
   let best=0;
   for(let a=0;a<CELLS;a++){
-    for(let i=0;i<CELLS;i++)bb[i]=board[i];
-    bb[a]=-1;moved0.fill(0);nw0.fill(0);
-    const c=gravity(bb,moved0,nw0,emE)[0],an=AFFN[a],at=AFFT[a];
+    bb.set(board);
+    const c=a%N,an=AFFN[a],at=AFFT[a];
+    for(let i=a;i>=N;i-=N)bb[i]=bb[i-N];
     let baseHit=false;
     for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
     let q=0;
     for(let d=0;d<K;d++){
       const p=weights[d];
       if(!(p>0))continue;
-      b2.set(bb);b2[c]=d;
+      bb[c]=d;
       let hit=baseHit;
-      if(!hit)for(let j=0;j<at.length;j+=3){const x=b2[at[j]];if(x===b2[at[j+1]]&&x===b2[at[j+2]]){hit=true;break;}}
+      if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
       if(!hit)q+=p;
-      else{b3.set(b2);m3.set(moved0);nwb.set(nw0);q+=p*(1+cascade(b3,m3,nwb));}
+      else{b3.set(bb);m3.set(MOVEDM[a]);nwb.set(NWM[a]);q+=p*(1+cascade(b3,m3,nwb));}
     }
     if(q>best)best=q;
   }
