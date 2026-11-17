@@ -185,8 +185,8 @@ function addE(p,bd,rm){
   for(let i=0;i<12;i++)hi=hi*5+bd[i];
   for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
   const key=rm*1220703125+lo,e=mapE.get(key);
-  if(e===undefined){const o={p,board:Uint8Array.from(bd),removed:rm,hi,next:null};mapE.set(key,o);outE.push(o);return;}
-  let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:Uint8Array.from(bd),removed:rm,hi,next:null};x.next=o;outE.push(o);return;}x=x.next;}
+  if(e===undefined){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};mapE.set(key,o);outE.push(o);return;}
+  let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};x.next=o;outE.push(o);return;}x=x.next;}
   x.p+=p;
 }
 // 補入 fill 後的處理:先看受影響的線,沒連鎖直接加入;有連鎖才跑完整 cascade(R>1 時重複抽樣)
