@@ -503,8 +503,8 @@ function showResults(){
     <td><b>${x.best.toFixed(2)}</b><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></td></tr>
     <tr class="${cls}" data-idx="${idx}"><td></td><td colspan="3" class="hs" style="text-align:left">${per}</td></tr>`;
   });
-  h+='</table><div class="mut" style="margin-top:6px">點任一列可選擇「模擬點擊」要模擬的起手點(盤面上以虛線框標示)。</div>';
-  $('res').innerHTML=h;
+  h+='</table><div class="mut" style="margin-top:6px">點任一列可選擇「模擬點擊」要模擬的起手點(盤面上以 👆 標示)。</div>';
+  $('res').innerHTML=h;hovIdx=null;
   setSimBtn();
   const b=results[order[0]];
   $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),期望 ${b.best.toFixed(2)} 張/步。`;
@@ -623,7 +623,7 @@ let simShown=false,sim=null;
 function setSimBtn(){
   const b=$('sim'),r=$('rst'),inSim=animating||simShown;
   b.textContent=inSim?'模擬下一步':'模擬點擊';
-  b.hidden=inSim?!animating&&sim.next<0:!results;
+  b.hidden=inSim?sim.next<0:!results;
   b.disabled=animating;
   r.hidden=!inSim;r.disabled=animating;
   $('go').hidden=inSim;$('up').hidden=inSim;
@@ -637,11 +637,11 @@ async function simulate(){ // 第一次按:模擬選定的起手點;之後每按
   if(animating)return;
   if(!simShown)sim={plan:DEPTH,done:0,total:0,b:board.slice(),next:simTarget()};
   if(sim.next<0)return;
-  const cur=sim,idx=cur.next;
+  const cur=sim,idx=cur.next,left=cur.plan-cur.done-1;
+  // 這一步的結果在播放動畫前就能算出來:先決定還有沒有下一步,沒有的話「模擬下一步」從動畫一開始就隱藏
+  cur.next=left>0?bestNext(dropSim(cur.b,idx).b,left).idx:-1;
   const r=await animate(cur.b,idx);
   cur.b=r.final;cur.done++;cur.total+=r.total;
-  const left=cur.plan-cur.done;
-  cur.next=left>0?bestNext(cur.b,left).idx:-1;
   simShown=true;setSimBtn();
   let msg=`模擬第 ${cur.done}/${cur.plan} 步:點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪),累計 ${cur.total} 張。`;
   if(cur.next>=0)msg+=`下一步會點 ${pos(cur.next)}(${NAMES[cur.b[cur.next]]}),按「模擬下一步」繼續。`;
@@ -896,6 +896,15 @@ function redrawShot(apply=true){
 
 $('sim').onclick=simulate;
 $('rst').onclick=restoreBoard;
+// 每個候選點佔兩列:滑鼠移上去時兩列一起反白
+let hovIdx=null;
+function setHov(idx){
+  if(idx===hovIdx)return;
+  hovIdx=idx;
+  $('res').querySelectorAll('tr.pick').forEach(t=>t.classList.toggle('hov',idx!=null&&+t.dataset.idx===idx));
+}
+$('res').onmouseover=e=>{const tr=e.target.closest('tr.pick');setHov(tr?+tr.dataset.idx:null);};
+$('res').onmouseleave=()=>setHov(null);
 // 在推薦列表點一列:選擇要模擬的起手點
 $('res').onclick=e=>{
   const tr=e.target.closest('tr.pick');
