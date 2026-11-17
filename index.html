@@ -49,6 +49,12 @@ th{color:var(--mut);font-weight:600;font-size:12px}
 .prog i{display:block;height:100%;width:0;background:var(--acc);transition:width .15s}
 .hs{font-size:12px;color:var(--mut)}
 .hs b{color:var(--tx)}
+/* 推薦列表:點一列選擇要模擬的起手點 */
+tr.pick{cursor:pointer}
+tr.pick:hover td{background:#ffffff0d}
+tr.pick.sel td{background:#f5c45126}
+tr.pick.sel td:first-child{box-shadow:inset 3px 0 0 var(--acc)}
+.cell.pk{outline:3px dashed #fff;outline-offset:-7px}
 details{margin-top:10px}summary{cursor:pointer;color:var(--mut);font-size:13px}
 ul{margin:6px 0;padding-left:20px;font-size:13px;color:var(--mut)}
 #cv{width:100%;touch-action:none;border-radius:8px;margin-top:8px;display:block;cursor:crosshair}
@@ -66,7 +72,7 @@ footer a:hover{color:var(--acc)}
   <div class="grid" id="grid"></div>
   <div class="row">
    <button class="btn" id="go">計算</button>
-   <button class="btn sec" id="sim" disabled>模擬點擊 #1</button>
+   <button class="btn sec" id="sim" disabled>模擬點擊</button>
    <button class="btn sec" id="up">📷 上傳截圖</button>
    <input type="file" id="file" accept="image/*" hidden>
   </div>
@@ -409,6 +415,8 @@ let board=[
  0,4,0,2,2,
  2,4,0,0,1];
 let brush=4,results=null,workers=null,workerUrl=null;
+let simIdx=null; // 要模擬的起手點(格子編號);null 表示用排名第 1 的
+const simTarget=()=>simIdx!=null?simIdx:rank()[0];
 const $=id=>document.getElementById(id);
 
 // 調色盤
@@ -432,6 +440,7 @@ function render(){
     if(results){
       const r=order.indexOf(i)+1,x=results[i];
       d.classList.add(r===1?'r1':r<=3?'r2':'x');
+      if(i===simTarget())d.classList.add('pk');
       // 期望分數越高越鮮亮,越低越灰暗
       const t=hi>lo?(x.best-lo)/(hi-lo):1;
       d.style.filter=`saturate(${(0.05+0.95*t).toFixed(2)}) brightness(${(0.5+0.5*t).toFixed(2)})`;
@@ -466,12 +475,13 @@ function showResults(){
   order.slice(0,10).forEach((idx,k)=>{
     const x=results[idx],r=Math.floor(idx/5)+1,c=idx%5+1;
     const per=x.q.slice(1).map((v,i)=>`<b>${i+1}步</b> ${(v/(i+1)).toFixed(2)}`).join(' · ');
-    h+=`<tr><td>${k+1}</td><td>第${r}列 第${c}行</td><td><span class="cell c${board[idx]}" style="display:inline-flex;width:28px;height:28px;font-size:14px;border-width:0">${NAMES[board[idx]]}</span></td>
+    const cls=`pick${idx===simTarget()?' sel':''}`;
+    h+=`<tr class="${cls}" data-idx="${idx}"><td>${k+1}</td><td>第${r}列 第${c}行</td><td><span class="cell c${board[idx]}" style="display:inline-flex;width:28px;height:28px;font-size:14px;border-width:0">${NAMES[board[idx]]}</span></td>
     <td><b>${x.best.toFixed(2)}</b><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></td>
     <td>${x.bestH}</td><td>${(x.pc*100).toFixed(0)}%</td></tr>
-    <tr><td></td><td colspan="5" class="hs" style="text-align:left">${per}</td></tr>`;
+    <tr class="${cls}" data-idx="${idx}"><td></td><td colspan="5" class="hs" style="text-align:left">${per}</td></tr>`;
   });
-  h+='</table>';
+  h+='</table><div class="mut" style="margin-top:6px">點任一列可選擇「模擬點擊」要模擬的起手點(盤面上以虛線框標示)。</div>';
   $('res').innerHTML=h;
   setSimBtn();
   const b=results[order[0]];
@@ -549,13 +559,13 @@ async function animate(start,idx){
 }
 let simShown=false; // true:格子目前顯示的是模擬後的畫面
 function setSimBtn(){ // 有計算結果(或正顯示模擬畫面)才能按;動畫播放中停用
-  const b=$('sim');b.textContent=simShown?'回復版面':'模擬點擊 #1';
+  const b=$('sim');b.textContent=simShown?'回復版面':'模擬點擊';
   b.disabled=animating||(!results&&!simShown);
 }
 function simulate(){ // 播放一次隨機模擬;模擬完按鈕變成「回復版面」
   if(animating)return;
   if(simShown){render();$('hint').textContent='已回復為你的盤面,可以再次模擬。';return;}
-  animate(board.slice(),rank()[0]);
+  animate(board.slice(),simTarget());
 }
 
 function stopWorkers(){
@@ -597,6 +607,7 @@ function run(){
     }catch(e){fail(e.message);return;}
     E.clearMemo();
     for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
+    simIdx=null;
     results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
     $('go').disabled=animating;$('pg').style.width='100%';
     $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
@@ -805,6 +816,14 @@ function redrawShot(apply=true){
 
 $('depth').onchange=()=>{cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='「規劃步數上限」已變更,請重新計算。';render();};
 $('sim').onclick=simulate;
+// 在推薦列表點一列:選擇要模擬的起手點
+$('res').onclick=e=>{
+  const tr=e.target.closest('tr.pick');
+  if(!tr||animating||!results)return;
+  simIdx=+tr.dataset.idx;
+  render();showResults(); // 若正顯示模擬後的畫面,render 會先回復盤面
+  $('hint').textContent=`已選擇模擬 第${Math.floor(simIdx/5)+1}列 第${simIdx%5+1}行(${NAMES[board[simIdx]]}),按「模擬點擊」播放。`;
+};
 const restored=loadState();
 render();
 if(restored&&results){showResults();$('st').textContent='已還原上次的計算結果(盤面沒變就不用重算)';}
