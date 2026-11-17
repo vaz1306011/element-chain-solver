@@ -343,7 +343,7 @@ let board=[
  3,3,2,4,1,
  0,4,0,2,2,
  2,4,0,0,1];
-let brush=4,results=null,workers=null;
+let brush=4,results=null,workers=null,workerUrl=null;
 const $=id=>document.getElementById(id);
 
 // 調色盤
@@ -373,7 +373,7 @@ function render(){
       inner=`<span class="rk">#${r}</span>${r===1?'<span class="star">★</span>':''}${NAMES[board[i]]}<small>${x.best.toFixed(2)}</small>`;
     }
     d.innerHTML=inner;
-    d.onclick=()=>{board[i]=brush;results=null;$('res').innerHTML='';$('hint').textContent='盤面已變更,請重新計算。';render();};
+    d.onclick=()=>{board[i]=brush;cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='盤面已變更,請重新計算。';render();};
     g.appendChild(d);
   }
   setSimBtn();
@@ -493,25 +493,36 @@ function simulate(){ // 播放一次隨機模擬;模擬完按鈕變成「回復�
   animate(board.slice(),rank()[0]);
 }
 
+function stopWorkers(){
+  if(workers){workers.forEach(w=>w.terminate());workers=null;}
+  if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;}
+}
+// 盤面或步數在計算途中被改掉時,停止進行中的計算(否則舊盤面的結果會顯示在新盤面上)
+function cancelRun(){
+  if(!workers)return;
+  stopWorkers();
+  $('go').disabled=animating;$('pg').style.width='0';$('st').textContent='已取消(盤面或設定已變更)';
+}
 function run(){
-  if(workers)workers.forEach(w=>w.terminate());
+  stopWorkers();
+  const bd=board.slice(); // 這次計算用的盤面快照:派工途中不受畫面上的修改影響
   $('go').disabled=true;$('pg').style.width='0';$('st').textContent='計算中…';
   const H=+$('depth').value,t0=performance.now(),Rv={2:100,3:4,4:1}[H];
   const src=$('engine').textContent+`
   onmessage=e=>{const d=e.data;R=d.R;IGN=d.ign;rs=12345+d.a;
    postMessage({a:d.a,r:analyzeOne(Int8Array.from(d.board),d.H,d.a)});};
   `;
-  const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+  const url=workerUrl=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
   // 等價點擊:同一欄裡上下相鄰且同色的兩格,點哪一格得到的盤面都一樣,只要算一次。
   // 這在盤面一開始沒有任何三連時嚴格成立(有三連時被移動與否會影響消除判定,就不合併)
   const lines3=[];for(let r=0;r<5;r++)for(let c=0;c<5;c++){if(c<3)lines3.push([r*5+c,r*5+c+1,r*5+c+2]);if(r<3)lines3.push([r*5+c,(r+1)*5+c,(r+2)*5+c]);}
-  const noTriple=lines3.every(([a,b,c])=>!(board[a]===board[b]&&board[b]===board[c]));
-  const srcOf=[];for(let a=0;a<25;a++)srcOf.push(noTriple&&a>=5&&board[a]===board[a-5]?srcOf[a-5]:a);
+  const noTriple=lines3.every(([a,b,c])=>!(bd[a]===bd[b]&&bd[b]===bd[c]));
+  const srcOf=[];for(let a=0;a<25;a++)srcOf.push(noTriple&&a>=5&&bd[a]===bd[a-5]?srcOf[a-5]:a);
   const tasks=[];for(let a=0;a<25;a++)if(srcOf[a]===a)tasks.push(a);
   // 以多個 Worker 平行計算,依序領取尚未計算的第一步
   const nW=Math.max(1,Math.min(25,navigator.hardwareConcurrency||4,tasks.length));
   const res=new Array(25);let next=0,done=0,failed=false;
-  const feed=w=>{if(next<tasks.length)w.postMessage({board,H,ign:1,R:Rv,a:tasks[next++]});};
+  const feed=w=>{if(next<tasks.length)w.postMessage({board:bd,H,ign:1,R:Rv,a:tasks[next++]});};
   workers=[];
   for(let i=0;i<nW;i++){
     const w=new Worker(url);workers.push(w);
@@ -519,14 +530,14 @@ function run(){
       res[e.data.a]=e.data.r;done++;
       $('pg').style.width=(done/tasks.length*100)+'%';
       if(done<tasks.length){feed(w);return;}
-      workers.forEach(x=>x.terminate());workers=null;URL.revokeObjectURL(url);
+      stopWorkers();
       for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
       results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
       $('go').disabled=false;$('pg').style.width='100%';
       $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
       render();showResults();
     };
-    w.onerror=e=>{if(failed)return;failed=true;workers&&workers.forEach(x=>x.terminate());workers=null;$('go').disabled=false;$('st').textContent='錯誤:'+e.message;};
+    w.onerror=e=>{if(failed)return;failed=true;stopWorkers();$('go').disabled=false;$('st').textContent='錯誤:'+e.message;};
     feed(w);
   }
 }
@@ -667,7 +678,7 @@ function redrawShot(apply=true){
   if(!apply)return; // 只是視窗大小改變(例如手機捲動收起網址列),不動盤面與計算結果
   // 套用到盤面
   board=board.map((v,i)=>shot.cells[i]>=0?shot.cells[i]:v);
-  results=null;$('res').innerHTML='';$('hint').textContent='已由截圖更新盤面,請按「計算」。'+((!shot.auto||unk)?'(辨識可能有誤,請展開「截圖辨識」檢查)':'');
+  cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='已由截圖更新盤面,請按「計算」。'+((!shot.auto||unk)?'(辨識可能有誤,請展開「截圖辨識」檢查)':'');
   $('shotmsg').textContent=(shot.auto?'已自動定位格子。':'自動定位失敗,請手動拖框對準 5×5 卡片。')+(unk?` 有 ${unk} 格無法辨識(紅色「?」,沿用原本的值),請調整框或用筆刷手動修正。`:' 25 格都已辨識,若有錯誤可微調框或用筆刷修正。');
   render();
 }
@@ -704,7 +715,7 @@ function redrawShot(apply=true){
   document.addEventListener('drop',e=>{e.preventDefault();const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/'));if(f)loadShot(f);});
 })();
 
-$('depth').onchange=()=>{results=null;$('res').innerHTML='';$('hint').textContent='「規劃步數上限」已變更,請重新計算。';render();};
+$('depth').onchange=()=>{cancelRun();results=null;$('res').innerHTML='';$('hint').textContent='「規劃步數上限」已變更,請重新計算。';render();};
 $('sim').onclick=simulate;
 const restored=loadState();
 render();
