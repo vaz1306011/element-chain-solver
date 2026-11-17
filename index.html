@@ -175,55 +175,62 @@ for(let idx=0;idx<CELLS;idx++){
   AFF.push(Int8Array.from(list));
 }
 // 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
+// 暫存緩衝區與合併用的 Map 提到外面重複使用(expand 不會遞迴呼叫自己)
+const bb=new Int8Array(CELLS),moved0=new Uint8Array(CELLS),nw0=new Uint8Array(CELLS);
+const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
+const emE=[],mapE=new Map();let outE=null;
+// 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數)
+function addE(p,bd,rm){
+  let lo=0,hi=0;
+  for(let i=0;i<12;i++)hi=hi*5+bd[i];
+  for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
+  const key=rm*1220703125+lo,e=mapE.get(key);
+  if(e===undefined){const o={p,board:Uint8Array.from(bd),removed:rm,hi,next:null};mapE.set(key,o);outE.push(o);return;}
+  let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:Uint8Array.from(bd),removed:rm,hi,next:null};x.next=o;outE.push(o);return;}x=x.next;}
+  x.p+=p;
+}
+// 補入 fill 後的處理:先看受影響的線,沒連鎖直接加入;有連鎖才跑完整 cascade(R>1 時重複抽樣)
+function settle(p,n,aff,R){
+  if(n===1){ // 快速路徑:受影響的線都沒湊成三連 => 沒有連鎖,結果就是 b2
+    let hit=false;
+    for(let j=0;j<aff.length;j+=3){const x=b2[aff[j]];if(x===b2[aff[j+1]]&&x===b2[aff[j+2]]){hit=true;break;}}
+    if(!hit){addE(p,b2,1);return;}
+  }
+  b3.set(b2);m3.set(m2);nwb.set(nw0);
+  const rm=cascade(b3,m3,nwb);
+  if(!casRnd){addE(p,b3,1+rm);return;}
+  addE(p/R,b3,1+rm);
+  for(let k=1;k<R;k++){
+    b3.set(b2);m3.set(m2);nwb.set(nw0);
+    addE(p/R,b3,1+cascade(b3,m3,nwb));
+  }
+}
 function expand(board,idx,R){
-  const b=Uint8Array.from(board);const bb=new Int8Array(CELLS);for(let i=0;i<CELLS;i++)bb[i]=b[i];
-  bb[idx]=-1;
-  const moved0=new Uint8Array(CELLS),nw0=new Uint8Array(CELLS);
-  const empties=gravity(bb,moved0,nw0);
-  const n=empties.length;
-  const fills=[];
+  for(let i=0;i<CELLS;i++)bb[i]=board[i];
+  bb[idx]=-1;moved0.fill(0);nw0.fill(0);
+  const empties=gravity(bb,moved0,nw0,emE),n=empties.length;
+  outE=[];mapE.clear();
+  const aff=AFF[idx];
   if(n<=2){
     const tot=Math.pow(K,n);
     for(let code=0;code<tot;code++){
-      let p=1,x=code;const f=[];
-      for(let i=0;i<n;i++){const d=x%K;x=(x/K)|0;f.push(d);p*=weights[d];}
-      if(p>0)fills.push([p,f]);
+      let p=1,x=code;
+      for(let i=0;i<n;i++){const d=x%K;x=(x/K)|0;p*=weights[d];}
+      if(!(p>0))continue;
+      b2.set(bb);m2.set(moved0);x=code;
+      for(let i=0;i<n;i++){b2[empties[i]]=x%K;x=(x/K)|0;}
+      settle(p,n,aff,R);
     }
   }else{
-    const S=20;
-    for(let s=0;s<S;s++){const f=[];for(let i=0;i<n;i++)f.push(draw());fills.push([1/S,f]);}
-  }
-  // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數)
-  const out=[],map=new Map();
-  const add=(p,bd,rm)=>{
-    let lo=0,hi=0;
-    for(let i=0;i<12;i++)hi=hi*5+bd[i];
-    for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
-    const key=rm*1220703125+lo,e=map.get(key);
-    if(e===undefined){const o={p,board:Uint8Array.from(bd),removed:rm,hi};map.set(key,o);out.push(o);return;}
-    let x=e;while(x.hi!==hi){if(!x.next){const o={p,board:Uint8Array.from(bd),removed:rm,hi};x.next=o;out.push(o);return;}x=x.next;}
-    x.p+=p;
-  };
-  const aff=AFF[idx];
-  const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
-  for(const [p,f] of fills){
-    b2.set(bb);m2.set(moved0);
-    for(let i=0;i<n;i++)b2[empties[i]]=f[i];
-    if(n===1){ // 快速路徑:受影響的線都沒湊成三連 => 沒有連鎖,結果就是 b2
-      let hit=false;
-      for(let j=0;j<aff.length;j+=3){const x=b2[aff[j]];if(x===b2[aff[j+1]]&&x===b2[aff[j+2]]){hit=true;break;}}
-      if(!hit){add(p,b2,1);continue;}
-    }
-    b3.set(b2);m3.set(m2);nwb.set(nw0);
-    const rm=cascade(b3,m3,nwb);
-    if(!casRnd){add(p,b3,1+rm);continue;}
-    add(p/R,b3,1+rm);
-    for(let k=1;k<R;k++){
-      b3.set(b2);m3.set(m2);nwb.set(nw0);
-      add(p/R,b3,1+cascade(b3,m3,nwb));
+    const S=20,fl=[]; // 先抽完全部樣本再逐一處理(維持原本的亂數順序)
+    for(let s=0;s<S*n;s++)fl.push(draw());
+    for(let s=0;s<S;s++){
+      b2.set(bb);m2.set(moved0);
+      for(let i=0;i<n;i++)b2[empties[i]]=fl[s*n+i];
+      settle(1/S,n,aff,R);
     }
   }
-  return out;
+  const r=outE;outE=null;return r;
 }
 const memo=new Map();
 // vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數
