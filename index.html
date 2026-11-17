@@ -228,8 +228,14 @@ function expand(board,idx,R){
 const memo=new Map();
 // vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數
 function vals(board,H){
-  const key=H+':'+board.join('');
-  const got=memo.get(key);if(got)return got;
+  // 數字 key:後 13 格編成 5 進位整數(再併入 H)當外層 key,前 12 格當內層 key,避免組字串
+  let hi=0,lo=0;
+  for(let i=0;i<12;i++)hi=hi*5+board[i];
+  for(let i=12;i<CELLS;i++)lo=lo*5+board[i];
+  const k1=lo*8+H;
+  let sub=memo.get(k1);
+  if(sub===undefined){sub=new Map();memo.set(k1,sub);}
+  const got=sub.get(hi);if(got)return got;
   const best=new Float64Array(H+1);
   for(let a=0;a<CELLS;a++){
     const outs=expand(board,a,1);
@@ -240,7 +246,7 @@ function vals(board,H){
     }
     for(let h=1;h<=H;h++)if(q[h]>best[h])best[h]=q[h];
   }
-  memo.set(key,best);return best;
+  sub.set(hi,best);return best;
 }
 // 分析「第一步點 a」的結果;各第一步彼此獨立,可分給不同 Worker 平行計算
 function analyzeOne(board,H,a){
