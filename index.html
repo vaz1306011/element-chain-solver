@@ -454,6 +454,7 @@ function rank(){ // 排名 index -> rank
 }
 function render(){
   const g=$('grid');g.innerHTML='';g.classList.remove('stage');
+  stopAnim(); // 重畫盤面時,播放中的模擬動畫一律中斷
   if(simShown||sim){simShown=false;sim=null;setSimBtn();}
   const order=rank();
   let lo=0,hi=1;
@@ -581,9 +582,15 @@ function bestNext(b,m){
   return {idx,extra,steps};
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let animating=false;
-// 播放「點 idx」的動畫(start 可以有空格),回傳這一步消除的張數、連鎖輪數與結束後的盤面
+let animating=false,animGen=0; // animGen:每次開始或中斷動畫就加 1,播放中的動畫發現編號不同就停止
+// 中斷播放中的動畫(回復版面、或盤面被重畫時)
+function stopAnim(){
+  if(!animating)return;
+  animGen++;animating=false;$('go').disabled=!!workers;
+}
+// 播放「點 idx」的動畫(start 可以有空格),回傳這一步消除的張數、連鎖輪數與結束後的盤面;中途被中斷時回傳 null
 async function animate(start,idx){
+  const gen=++animGen;
   animating=true;setSimBtn();$('go').disabled=true;
   const sp=0.5;
   const {steps,total,final}=buildSteps(start,idx);
@@ -597,11 +604,13 @@ async function animate(start,idx){
   let cum=0;
   await sleep(350*sp);
   for(const st of steps){
+    if(gen!==animGen)return null;
     if(st.type==='clear'){
       st.ids.forEach(id=>els.get(id).classList.add('pop'));
       cum+=st.ids.length;
       $('hint').textContent=st.round===0?`點擊 ${pos(idx)}(${NAMES[start[idx]]})`:`連鎖 ${st.round}:消除 ${st.ids.length} 張,累計 ${cum} 張`;
       await sleep(450*sp+80);
+      if(gen!==animGen)return null;
       st.ids.forEach(id=>{els.get(id).remove();els.delete(id);});
     }else{
       for(const s of st.spawns)els.set(s.id,mk(s.color,s.from,s.col));
@@ -611,6 +620,7 @@ async function animate(start,idx){
       await sleep(500*sp+120);
     }
   }
+  if(gen!==animGen)return null;
   animating=false;$('go').disabled=!!workers;
   return {total,rounds:steps.filter(s=>s.type==='clear').length-1,final};
 }
@@ -618,7 +628,7 @@ const pos=i=>`第${Math.floor(i/5)+1}列第${i%5+1}行`;
 // 模擬狀態。simShown:格子目前顯示的是模擬後的畫面(盤面與排名結果都維持不變,模擬只是預覽)。
 // sim:進行中的模擬 {plan:最多模擬幾步, done:已模擬步數, total:累計消除, b:目前的模擬盤面(空格為 -1), next:下一步要點的格子(-1 表示沒有了)}
 let simShown=false,sim=null;
-// 只顯示目前用得到的按鈕(動畫播放中按鈕停用):
+// 只顯示目前用得到的按鈕(動畫播放中「模擬下一步」停用,「回復版面」隨時可按):
 // 平常:「上傳截圖」,加上「計算」(還沒有這個盤面的結果時)或「模擬點擊」(已有結果時);
 // 模擬中:只留「模擬下一步」(沒有下一步時也隱藏)與「回復版面」
 function setSimBtn(){
@@ -626,11 +636,10 @@ function setSimBtn(){
   b.textContent=inSim?'模擬下一步':'模擬點擊';
   b.hidden=inSim?sim.next<0:!results;
   b.disabled=animating;
-  r.hidden=!inSim;r.disabled=animating;
+  r.hidden=!inSim;
   $('go').hidden=inSim||!!results;$('up').hidden=inSim; // 已有這個盤面的計算結果時不需要再算(盤面一變更 results 就會清掉)
 }
-function restoreBoard(){
-  if(animating)return;
+function restoreBoard(){ // 動畫播放到一半也可以按:中斷模擬,直接回到原本的盤面
   render();$('hint').textContent='已回復為你的盤面,可以再次模擬。';
 }
 const NOFILL='模擬不補新牌,只看盤面上現有的牌;你的盤面沒有改變。';
@@ -642,6 +651,7 @@ async function simulate(){ // 第一次按:模擬選定的起手點;之後每按
   // 這一步的結果在播放動畫前就能算出來:先決定還有沒有下一步,沒有的話「模擬下一步」從動畫一開始就隱藏
   cur.next=left>0?bestNext(dropSim(cur.b,idx).b,left).idx:-1;
   const r=await animate(cur.b,idx);
+  if(!r)return; // 動畫被中斷(已回復版面或盤面已變更)
   cur.b=r.final;cur.done++;cur.total+=r.total;
   simShown=true;setSimBtn();
   let msg=`模擬第 ${cur.done}/${cur.plan} 步:點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪),累計 ${cur.total} 張。`;
