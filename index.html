@@ -496,18 +496,25 @@ function run(){
    postMessage({a:d.a,r:analyzeOne(Int8Array.from(d.board),d.H,d.a)});};
   `;
   const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+  // 等價點擊:同一欄裡上下相鄰且同色的兩格,點哪一格得到的盤面都一樣,只要算一次。
+  // 這在盤面一開始沒有任何三連時嚴格成立(有三連時被移動與否會影響消除判定,就不合併)
+  const lines3=[];for(let r=0;r<5;r++)for(let c=0;c<5;c++){if(c<3)lines3.push([r*5+c,r*5+c+1,r*5+c+2]);if(r<3)lines3.push([r*5+c,(r+1)*5+c,(r+2)*5+c]);}
+  const noTriple=lines3.every(([a,b,c])=>!(board[a]===board[b]&&board[b]===board[c]));
+  const srcOf=[];for(let a=0;a<25;a++)srcOf.push(noTriple&&a>=5&&board[a]===board[a-5]?srcOf[a-5]:a);
+  const tasks=[];for(let a=0;a<25;a++)if(srcOf[a]===a)tasks.push(a);
   // 以多個 Worker 平行計算,依序領取尚未計算的第一步
-  const nW=Math.max(1,Math.min(25,navigator.hardwareConcurrency||4));
+  const nW=Math.max(1,Math.min(25,navigator.hardwareConcurrency||4,tasks.length));
   const res=new Array(25);let next=0,done=0,failed=false;
-  const feed=w=>{if(next<25)w.postMessage({board,H,ign:1,R:Rv,a:next++});};
+  const feed=w=>{if(next<tasks.length)w.postMessage({board,H,ign:1,R:Rv,a:tasks[next++]});};
   workers=[];
   for(let i=0;i<nW;i++){
     const w=new Worker(url);workers.push(w);
     w.onmessage=e=>{
       res[e.data.a]=e.data.r;done++;
-      $('pg').style.width=(done/25*100)+'%';
-      if(done<25){feed(w);return;}
+      $('pg').style.width=(done/tasks.length*100)+'%';
+      if(done<tasks.length){feed(w);return;}
       workers.forEach(x=>x.terminate());workers=null;URL.revokeObjectURL(url);
+      for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
       results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
       $('go').disabled=false;$('pg').style.width='100%';
       $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
