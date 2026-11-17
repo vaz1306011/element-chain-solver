@@ -174,37 +174,37 @@ function cascade(b,moved,nw){
   }
   return removed;
 }
-// 預先算好:點下 idx 後可能新形成三連的線(經過同欄、該列以上的格子),以平的 [a,b,c,...] 存放
-const AFF=[];
+// 預先算好:點下 idx 後可能新形成三連的線(經過同欄、該列以上的格子),以平的 [a,b,c,...] 存放。
+// 點擊後頂端新牌的格子是 idx%N:經過它的線(AFFT)隨補入顏色而定,其餘(AFFN)與補入顏色無關
+const AFFT=[],AFFN=[];
 for(let idx=0;idx<CELLS;idx++){
-  const col=idx%N,row=(idx/N)|0,list=[];
+  const col=idx%N,row=(idx/N)|0,lt=[],ln=[];
   const touch=p=>p%N===col&&((p/N)|0)<=row;
-  for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){const a=r*N+c;if(touch(a)||touch(a+1)||touch(a+2))list.push(a,a+1,a+2);}
-  for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){const a=r*N+c;if(touch(a)||touch(a+N)||touch(a+2*N))list.push(a,a+N,a+2*N);}
-  AFF.push(Int8Array.from(list));
+  const push=(a,b,c)=>{if(!(touch(a)||touch(b)||touch(c)))return;((a===col||b===col||c===col)?lt:ln).push(a,b,c);};
+  for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){const a=r*N+c;push(a,a+1,a+2);}
+  for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){const a=r*N+c;push(a,a+N,a+2*N);}
+  AFFT.push(Int8Array.from(lt));AFFN.push(Int8Array.from(ln));
 }
 // 點下 idx,回傳所有結果 [{p,board,removed}](removed 含被點的那張)
 // 暫存緩衝區與合併用的 Map 提到外面重複使用(expand 不會遞迴呼叫自己)
 const bb=new Int8Array(CELLS),moved0=new Uint8Array(CELLS),nw0=new Uint8Array(CELLS);
 const b2=new Int8Array(CELLS),m2=new Uint8Array(CELLS),b3=new Int8Array(CELLS),m3=new Uint8Array(CELLS),nwb=new Uint8Array(CELLS);
 const emE=[],mapE=new Map();let outE=null;
-// 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數)
-function addE(p,bd,rm){
-  let lo=0,hi=0;
-  for(let i=0;i<12;i++)hi=hi*5+bd[i];
-  for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
+// 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數 hi/lo)
+function addK(p,bd,rm,hi,lo){
   const key=rm*1220703125+lo,e=mapE.get(key);
   if(e===undefined){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};mapE.set(key,o);outE.push(o);return;}
   let x=e;while(x.hi!==hi){if(x.next===null){const o={p,board:new Uint8Array(bd),removed:rm,hi,next:null};x.next=o;outE.push(o);return;}x=x.next;}
   x.p+=p;
 }
-// 補入 fill 後的處理:先看受影響的線,沒連鎖直接加入;有連鎖才跑完整 cascade(R>1 時重複抽樣)
-function settle(p,n,aff,R){
-  if(n===1){ // 快速路徑:受影響的線都沒湊成三連 => 沒有連鎖,結果就是 b2
-    let hit=false;
-    for(let j=0;j<aff.length;j+=3){const x=b2[aff[j]];if(x===b2[aff[j+1]]&&x===b2[aff[j+2]]){hit=true;break;}}
-    if(!hit){addE(p,b2,1);return;}
-  }
+function addE(p,bd,rm){
+  let lo=0,hi=0;
+  for(let i=0;i<12;i++)hi=hi*5+bd[i];
+  for(let i=12;i<CELLS;i++)lo=lo*5+bd[i];
+  addK(p,bd,rm,hi,lo);
+}
+// 補入 fill 後跑完整 cascade(R>1 時重複抽樣)
+function chain(p,R){
   b3.set(b2);m3.set(m2);nwb.set(nw0);
   const rm=cascade(b3,m3,nwb);
   if(!casRnd){addE(p,b3,1+rm);return;}
@@ -214,12 +214,33 @@ function settle(p,n,aff,R){
     addE(p/R,b3,1+cascade(b3,m3,nwb));
   }
 }
+const PW=[5**11,5**10,5**9,5**8,5**7]; // 前 12 格中第 0~4 格(頂列)的 5 進位權重
 function expand(board,idx,R){
   for(let i=0;i<CELLS;i++)bb[i]=board[i];
   bb[idx]=-1;moved0.fill(0);nw0.fill(0);
   const empties=gravity(bb,moved0,nw0,emE),n=empties.length;
   outE=[];mapE.clear();
-  const aff=AFF[idx];
+  if(n===1){
+    // 點一張牌只空出頂端 1 格:不經過該格的受影響線與補入顏色無關,只需判斷一次;
+    // 經過該格的線(最多 4 條)才隨顏色檢查。沒有連鎖時結果就是 b2,key 由基底盤面增量計算
+    const c=empties[0],an=AFFN[idx],at=AFFT[idx];
+    let baseHit=false;
+    for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
+    bb[c]=0;
+    let hi0=0,lo0=0;
+    for(let i=0;i<12;i++)hi0=hi0*5+bb[i];
+    for(let i=12;i<CELLS;i++)lo0=lo0*5+bb[i];
+    for(let d=0;d<K;d++){
+      const p=weights[d];
+      if(!(p>0))continue;
+      b2.set(bb);m2.set(moved0);b2[c]=d;
+      let hit=baseHit;
+      if(!hit)for(let j=0;j<at.length;j+=3){const x=b2[at[j]];if(x===b2[at[j+1]]&&x===b2[at[j+2]]){hit=true;break;}}
+      if(!hit)addK(p,b2,1,hi0+d*PW[c],lo0);
+      else chain(p,R);
+    }
+    const r=outE;outE=null;return r;
+  }
   if(n<=2){
     const tot=Math.pow(K,n);
     for(let code=0;code<tot;code++){
@@ -228,7 +249,7 @@ function expand(board,idx,R){
       if(!(p>0))continue;
       b2.set(bb);m2.set(moved0);x=code;
       for(let i=0;i<n;i++){b2[empties[i]]=x%K;x=(x/K)|0;}
-      settle(p,n,aff,R);
+      chain(p,R);
     }
   }else{
     const S=20,fl=[]; // 先抽完全部樣本再逐一處理(維持原本的亂數順序)
@@ -236,7 +257,7 @@ function expand(board,idx,R){
     for(let s=0;s<S;s++){
       b2.set(bb);m2.set(moved0);
       for(let i=0;i<n;i++)b2[empties[i]]=fl[s*n+i];
-      settle(1/S,n,aff,R);
+      chain(1/S,R);
     }
   }
   const r=outE;outE=null;return r;
