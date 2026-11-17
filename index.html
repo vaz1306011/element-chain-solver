@@ -221,21 +221,17 @@ function vals(board,H){
   }
   memo.set(key,best);return best;
 }
-function analyze(board,H,cb){
-  memo.clear();const res=[];
-  for(let a=0;a<CELLS;a++){
-    const outs=expand(board,a,R);
-    const q=new Float64Array(H+1);let pc=0,maxRm=0;
-    for(const o of outs){
-      const ch=H>1?vals(o.board,H-1):null;
-      for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
-      if(o.removed>1)pc+=o.p;
-      if(o.removed>maxRm)maxRm=o.removed;
-    }
-    res.push({idx:a,q:Array.from(q),pc,maxRm});
-    cb&&cb(a+1);
+// 分析「第一步點 a」的結果;各第一步彼此獨立,可分給不同 Worker 平行計算
+function analyzeOne(board,H,a){
+  const outs=expand(board,a,R);
+  const q=new Float64Array(H+1);let pc=0,maxRm=0;
+  for(const o of outs){
+    const ch=H>1?vals(o.board,H-1):null;
+    for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
+    if(o.removed>1)pc+=o.p;
+    if(o.removed>maxRm)maxRm=o.removed;
   }
-  return res;
+  return {idx:a,q:Array.from(q),pc,maxRm};
 }
 </script>
 
@@ -247,7 +243,7 @@ let board=[
  3,3,2,4,1,
  0,4,0,2,2,
  2,4,0,0,1];
-let brush=4,results=null,worker=null;
+let brush=4,results=null,workers=null;
 const $=id=>document.getElementById(id);
 
 // 調色盤
@@ -398,23 +394,34 @@ function simulate(){ // 播放一次隨機模擬;模擬完按鈕變成「回復�
 }
 
 function run(){
-  if(worker)worker.terminate();
+  if(workers)workers.forEach(w=>w.terminate());
   $('go').disabled=true;$('pg').style.width='0';$('st').textContent='計算中…';
-  const H=+$('depth').value,t0=performance.now();
+  const H=+$('depth').value,t0=performance.now(),Rv={2:100,3:4,4:1}[H];
   const src=$('engine').textContent+`
-  onmessage=e=>{const d=e.data;R=d.R;IGN=d.ign;rng=mulberry32(12345);
-   const res=analyze(Int8Array.from(d.board),d.H,n=>postMessage({prog:n}));postMessage({res});};
+  onmessage=e=>{const d=e.data;R=d.R;IGN=d.ign;rng=mulberry32(12345+d.a);
+   postMessage({a:d.a,r:analyzeOne(Int8Array.from(d.board),d.H,d.a)});};
   `;
-  worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
-  worker.onmessage=e=>{
-    if(e.data.prog){$('pg').style.width=(e.data.prog/25*100)+'%';return;}
-    results=e.data.res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
-    $('go').disabled=false;$('pg').style.width='100%';
-    $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒`;
-    render();showResults();
-  };
-  worker.onerror=e=>{$('go').disabled=false;$('st').textContent='錯誤:'+e.message;};
-  worker.postMessage({board,H,ign:1,R:{2:100,3:4,4:1}[H]});
+  const url=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+  // 以多個 Worker 平行計算,依序領取尚未計算的第一步
+  const nW=Math.max(1,Math.min(8,(navigator.hardwareConcurrency||4)-1,25));
+  const res=new Array(25);let next=0,done=0,failed=false;
+  const feed=w=>{if(next<25)w.postMessage({board,H,ign:1,R:Rv,a:next++});};
+  workers=[];
+  for(let i=0;i<nW;i++){
+    const w=new Worker(url);workers.push(w);
+    w.onmessage=e=>{
+      res[e.data.a]=e.data.r;done++;
+      $('pg').style.width=(done/25*100)+'%';
+      if(done<25){feed(w);return;}
+      workers.forEach(x=>x.terminate());workers=null;URL.revokeObjectURL(url);
+      results=res.map(x=>{let bh=1,bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs){bs=s;bh=h;}}x.best=bs;x.bestH=bh;return x;});
+      $('go').disabled=false;$('pg').style.width='100%';
+      $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
+      render();showResults();
+    };
+    w.onerror=e=>{if(failed)return;failed=true;workers&&workers.forEach(x=>x.terminate());workers=null;$('go').disabled=false;$('st').textContent='錯誤:'+e.message;};
+    feed(w);
+  }
 }
 $('go').onclick=run;
 /* ===== 截圖辨識 ===== */
