@@ -93,9 +93,9 @@ footer a:hover{color:var(--acc)}
    <ul>
     <li>點一張只消除那一張 → 上方下落 → 空位隨機補滿 → 橫向或直向連續 3 張以上同屬性者自動消除(T 字、十字、L 字等線條交會也一起消),重複到沒有為止。2×2 方塊這類沒有 3 連線的不算。</li>
     <li>分數 = 總消除張數 ÷ 步數(每一步點一下)。每一步都假設你看到新盤面後再選最佳點(適應性策略),補牌是隨機的,所以算的是期望值。</li>
-    <li>對每個起手點,計算「接下來規劃 1 ~ 4 步」的最大期望消除數,取 期望/步數 最高者;這就包含「先佈局、最後才爆」的情況。計算在電腦上約 1 秒內、手機上可能要數秒。</li>
+    <li>對每個起手點,計算「接下來規劃 1 ~ 4 步」的最大期望消除數,取 期望/步數 最高者;這就包含「先佈局、最後才爆」的情況。計算在電腦上約 1 秒、手機上可能要數秒。</li>
     <li>點下去補牌後盤面會變,建議每點一下就把新盤面輸入重算。</li>
-    <li>每一步補進來的第一張牌為精確枚舉(五種屬性各算一次);連鎖過程中後續的補牌為隨機取樣(每個連鎖分支模擬 1 次),所以分數是估計值,名次接近時可能互換。同一個盤面重算會得到相同的結果。</li>
+    <li>每一步補進來的第一張牌為精確枚舉(五種屬性各算一次);連鎖過程中後續的補牌為隨機取樣,所以分數是估計值,名次接近時可能互換。第一下本身的消除張數變動最大(偶爾會抽到一長串連鎖),所以每種補牌顏色模擬 2000 次取平均;之後幾步的規劃則是第一下取樣 4 次、其餘每個連鎖分支模擬 1 次。同一個盤面重算會得到相同的結果。</li>
     <li>為了讓估計偏保守,新補進來的卡片彼此自己連成的線不算,只算跟留在盤面上的卡片相連的線。</li>
    </ul>
   </details>
@@ -111,7 +111,7 @@ footer a:hover{color:var(--acc)}
 
 <script type="text/plain" id="engine">
 const N=5,CELLS=25,K=5;
-let IGN=1,R=4,weights=[.2,.2,.2,.2,.2],cum=[.2,.4,.6,.8,1],UNI=true; // UNI:五種顏色機率相等
+let IGN=1,R=4,R1=2000,weights=[.2,.2,.2,.2,.2],cum=[.2,.4,.6,.8,1],UNI=true; // UNI:五種顏色機率相等
 // 亂數(mulberry32),狀態放在 rs 以便儲存/還原。
 // 每個盤面在計算自己的值時改用「由盤面編碼決定的種子」(seedOf),算完再還原上層的狀態:
 // 這樣同一盤面的值與計算順序、有沒有命中快取、由哪個 Worker 計算都無關,結果可重複
@@ -384,18 +384,46 @@ function putFrontier(boards,Hf,values){
     else{const v=new Float64Array(Hf+1);for(let h=1;h<=Hf;h++)v[h]=values[i*Hf+h-1];sub.set(hi,v);}
   }
 }
-// 分析「第一步點 a」的結果;各第一步彼此獨立,可分給不同 Worker 平行計算
+// 第一步「點 a」本身的期望消除數(含被點的那張):補入的五種顏色各算一次,會連鎖到補牌的顏色重複取樣 n 次取平均。
+// 只跑連鎖、不必往後規劃,所以很便宜,可以取樣很多次。亂數種子只由點擊位置決定,算完還原上層的狀態
+function firstVal(board,a,n){
+  const saved=rs;rs=(0x51ED270B^Math.imul(a+1,0x27D4EB2F))|0;
+  const c=a%N,an=AFFN[a],at=AFFT[a];
+  bb.set(board);
+  for(let i=a;i>=N;i-=N)bb[i]=bb[i-N];
+  let baseHit=false;
+  for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
+  let q=0;
+  for(let d=0;d<K;d++){
+    const p=weights[d];
+    if(!(p>0))continue;
+    bb[c]=d;
+    let hit=baseHit;
+    if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
+    if(!hit){q+=p;continue;}
+    b3.set(bb);
+    let s=cascade(b3,MOVEDM[a],NWM[a]);
+    if(casRnd){for(let k=1;k<n;k++){b3.set(bb);s+=cascade(b3,MOVEDM[a],NWM[a]);}s/=n;}
+    q+=p*(1+s);
+  }
+  rs=saved;
+  return q;
+}
+// 分析「第一步點 a」的結果;各第一步彼此獨立,可分給不同 Worker 平行計算。
+// 第一步的消除數變異很大(偶爾會抽到一長串連鎖),所以拆成兩部分估計:
+// 「第一步本身的消除數」用 firstVal 大量取樣(R1 次);「之後幾步的期望」才用 expand 的 R 次取樣往後規劃
 function analyzeOne(board,H,a){
   const outs=expand(board,a,R);
   const q=new Float64Array(H+1);let pc=0,maxRm=0;
   for(const o of outs){
-    if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));}
-    else{
-      q[1]+=o.p*o.removed;
-      if(H>2){const ch=vals(o.board,H-1,o.hi,o.lo);for(let h=2;h<=H;h++)q[h]+=o.p*(o.removed+ch[h-1]);}
-    }
+    if(H===2)q[2]+=o.p*leafVal(o.board,o.hi,o.lo);
+    else if(H>2){const ch=vals(o.board,H-1,o.hi,o.lo);for(let h=2;h<=H;h++)q[h]+=o.p*ch[h-1];}
     if(o.removed>1)pc+=o.p;
     if(o.removed>maxRm)maxRm=o.removed;
+  }
+  if(COL===null){ // 收集前緣時算出的值會被丟掉,不必取樣
+    const q1=firstVal(board,a,R1);
+    q[1]=q1;for(let h=2;h<=H;h++)q[h]+=q1;
   }
   return {idx:a,q:Array.from(q),pc,maxRm};
 }
@@ -629,7 +657,7 @@ function run(){
   stopWorkers();
   const bd=board.slice(); // 這次計算用的盤面快照:派工途中不受畫面上的修改影響
   $('go').disabled=true;$('pg').style.width='0';$('st').textContent='計算中…';
-  const H=DEPTH,t0=performance.now(),Rv=1; // Rv:第一步發生連鎖時的取樣次數
+  const H=DEPTH,t0=performance.now(),Rv=4; // Rv:第一步發生連鎖時,往後規劃用的取樣次數(第一步本身的消除數另外大量取樣,見引擎的 R1)
   // 等價點擊:同一欄裡上下相鄰且同色的兩格,點哪一格得到的盤面都一樣,只要算一次。
   // 這在盤面一開始沒有任何三連時嚴格成立(有三連時被移動與否會影響消除判定,就不合併)
   const lines3=[];for(let r=0;r<5;r++)for(let c=0;c<5;c++){if(c<3)lines3.push([r*5+c,r*5+c+1,r*5+c+2]);if(r<3)lines3.push([r*5+c,(r+1)*5+c,(r+2)*5+c]);}
