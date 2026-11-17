@@ -833,6 +833,8 @@ function loadShot(file){
     shot={full,cx,w,h,rect,auto:!!auto,cells:Array(25).fill(-1)};
     $('cvbox').style.display='block';
     redrawShot();
+    // 自動定位成功且 25 格都辨識出來才自動計算;否則留給使用者先檢查/修正
+    if(shot.auto&&shot.cells.every(v=>v>=0))run();
   };
   img.onerror=()=>{$('shotmsg').textContent='無法讀取這個圖片檔。';};
   img.src=url;
