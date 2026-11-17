@@ -277,8 +277,8 @@ function leafVal(board,hi,lo){
   if(COL!==null&&COL.H===1){COL.boards.push(board);sub.set(hi,0);return 0;}
   const saved=rs;rs=seedOf(hi,lo,1);
   let best=0;
+  bb.set(board);
   for(let a=0;a<CELLS;a++){
-    bb.set(board);
     const c=a%N,an=AFFN[a],at=AFFT[a];
     for(let i=a;i>=N;i-=N)bb[i]=bb[i-N];
     let baseHit=false;
@@ -293,6 +293,7 @@ function leafVal(board,hi,lo){
       if(!hit)q+=p;
       else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a]));}
     }
+    for(let i=c;i<=a;i+=N)bb[i]=board[i]; // 只還原被這次點擊改動的那一欄
     if(q>best)best=q;
   }
   rs=saved;
