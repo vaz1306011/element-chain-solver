@@ -133,24 +133,25 @@ function gravity(b,moved,nw,out,cols){
 }
 // 只有橫向或直向連續 3 張以上才算;T/十字/L 是兩條線交會,自然一起消除
 // nw:這一輪「新補進來」的格。IGN 開啟時,完全由新補卡片組成的線不算(只算跟留在盤面上的卡片相連的線)
-// 預先攤平的 30 條三連線(橫 15 + 直 15):先用它快速排除「完全沒有三連」的常見情況
-const TA=new Int8Array(30),TB=new Int8Array(30),TC=new Int8Array(30),TL=new Uint16Array(30); // TL:該三連所在的線(0~4 橫列、5~9 直行)的位元
-{let n=0;
- for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){TA[n]=r*N+c;TB[n]=r*N+c+1;TC[n]=r*N+c+2;TL[n]=1<<r;n++;}
- for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){TA[n]=r*N+c;TB[n]=(r+1)*N+c;TC[n]=(r+2)*N+c;TL[n]=1<<(N+c);n++;}}
-// TLIST[ac]:經過 ac(位元,有牌位移的欄)任一欄的三連線。含位移格的 3 連以上段必含一條這樣的三連
-const TLIST=[],COLB=new Uint8Array(CELLS);
+const COLB=new Uint8Array(CELLS); // 各格所在欄的位元
 for(let i=0;i<CELLS;i++)COLB[i]=1<<(i%N);
-for(let ac=0;ac<32;ac++){
-  const l=[];
-  for(let t=0;t<30;t++)if((COLB[TA[t]]|COLB[TB[t]]|COLB[TC[t]])&ac)l.push(t);
-  TLIST.push(Uint8Array.from(l));
-}
 let clrCols=0; // 最近一次 clearGroups 實際消除的格子所在的欄(位元)
-function clearGroups(b,moved,nw,ac){
-  const tl=TLIST[ac===undefined?31:ac];
+// 位元遮罩版三連檢測:每種顏色一個 25 位元遮罩(第 i 位 = 第 i 格),位移再 AND 一次找出所有三連
+const CM=new Int32Array(5),ROWM=[],COLM=[];
+for(let r=0;r<N;r++)ROWM.push(31<<(r*N));
+for(let c=0;c<N;c++){let m=0;for(let r=0;r<N;r++)m|=1<<(r*N+c);COLM.push(m);}
+let HST=0;for(let r=0;r<N;r++)HST|=7<<(r*N); // 橫向三連的起點只能在第 0~2 欄
+function clearGroups(b,moved,nw){
+  CM[0]=0;CM[1]=0;CM[2]=0;CM[3]=0;CM[4]=0;
+  for(let i=0;i<CELLS;i++)CM[b[i]]|=1<<i;
+  let ha=0,va=0;
+  for(let k=0;k<5;k++){const m=CM[k];ha|=m&(m>>1)&(m>>2);va|=m&(m>>N)&(m>>(2*N));}
+  ha&=HST;
   let lines=0; // 有三連的線;沒有三連的線不可能有 3 張以上的連續段,不必掃
-  for(let k=0;k<tl.length;k++){const t=tl[k],x=b[TA[t]];if(x===b[TB[t]]&&x===b[TC[t]])lines|=TL[t];}
+  if(ha|va){
+    for(let r=0;r<N;r++)if(ha&ROWM[r])lines|=1<<r;
+    for(let c=0;c<N;c++)if(va&COLM[c])lines|=1<<(N+c);
+  }
   if(lines===0)return 0;
   let mk=0;
   for(let dir=0;dir<2;dir++){
@@ -177,7 +178,7 @@ const emC=[];let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
 function cascade(b,moved,nw,ac){ // ac:一開始有牌位移的欄(位元),之後每輪就是上一輪消除所在的欄
   let removed=0;casRnd=false;
   for(;;){
-    const n=clearGroups(b,moved,nw,ac);
+    const n=clearGroups(b,moved,nw);
     if(!n)break;
     removed+=n;for(let i=0;i<CELLS;i++){moved[i]=0;nw[i]=0;}
     ac=clrCols;
