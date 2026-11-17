@@ -168,14 +168,15 @@ function clearGroups(b,moved,nw){
   return clearMasks(b,mv,nwm);
 }
 let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
-// 連鎖:反覆「消除 → 重力+補牌」直到沒有可消除的。ac:一開始有牌位移的欄(位元),之後每輪就是上一輪消除所在的欄。
-// 重力與補牌合併成一次掃描:各欄由左到右、每欄由下往上補(抽牌順序固定)
-function cascade(b,mv,nwm,ac){
+// 連鎖:反覆「消除 → 重力+補牌」直到沒有可消除的。mv/nwm:一開始有位移/新補的格(位元)。
+// 重力與補牌合併成一次掃描,只處理上一輪有消除的欄:各欄由左到右、每欄由下往上補(抽牌順序固定)
+function cascade(b,mv,nwm){
   let removed=0;casRnd=false;
   for(;;){
     const n=clearMasks(b,mv,nwm);
     if(!n)break;
-    removed+=n;mv=0;nwm=0;ac=clrCols;
+    removed+=n;mv=0;nwm=0;
+    const ac=clrCols;
     for(let c=0;c<N;c++){
       if(!((ac>>c)&1))continue;
       let w=N-1;
@@ -227,12 +228,12 @@ function addE(p,bd,rm){
 // 補入新牌後有連鎖:以 b2(補牌後的盤面)跑完整 cascade(R>1 時重複抽樣)
 function chain(p,R,idx){
   b3.set(b2);
-  const rm=cascade(b3,MOVEDM[idx],NWM[idx],COLB[idx]);
+  const rm=cascade(b3,MOVEDM[idx],NWM[idx]);
   if(!casRnd){addE(p,b3,1+rm);return;}
   addE(p/R,b3,1+rm);
   for(let k=1;k<R;k++){
     b3.set(b2);
-    addE(p/R,b3,1+cascade(b3,MOVEDM[idx],NWM[idx],COLB[idx]));
+    addE(p/R,b3,1+cascade(b3,MOVEDM[idx],NWM[idx]));
   }
 }
 const PW=[5**11,5**10,5**9,5**8,5**7]; // 前 12 格中第 0~4 格(頂列)的 5 進位權重
@@ -285,14 +286,15 @@ function leafVal(board,hi,lo){
       let hit=baseHit;
       if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
       if(!hit)q+=p;
-      else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a],COLB[a]));}
+      else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a]));}
     }
     if(q>best)best=q;
   }
   rs=saved;
   sub.set(hi,best);return best;
 }
-// vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數(hi/lo:盤面的數字編碼,呼叫端已算好時帶入)
+// vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數(hi/lo:盤面的數字編碼,呼叫端已算好時帶入)。
+// 只用於 H>=2:剩 1 步由 leafVal 處理(兩者共用 memo,以 key 裡的 H 區分)
 function vals(board,H,hi,lo){
   if(hi===undefined){ // 數字 key:後 13 格編成 5 進位整數(再併入 H)當外層 key,前 12 格當內層 key,避免組字串
     hi=0;lo=0;
@@ -310,8 +312,9 @@ function vals(board,H,hi,lo){
     const q=new Float64Array(H+1);
     for(const o of outs){
       if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));continue;}
-      const ch=H>1?vals(o.board,H-1,o.hi,o.lo):null;
-      for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
+      const ch=vals(o.board,H-1,o.hi,o.lo);
+      q[1]+=o.p*o.removed;
+      for(let h=2;h<=H;h++)q[h]+=o.p*(o.removed+ch[h-1]);
     }
     for(let h=1;h<=H;h++)if(q[h]>best[h])best[h]=q[h];
   }
@@ -325,8 +328,8 @@ function analyzeOne(board,H,a){
   for(const o of outs){
     if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));}
     else{
-      const ch=H>1?vals(o.board,H-1,o.hi,o.lo):null;
-      for(let h=1;h<=H;h++)q[h]+=o.p*(o.removed+(h>1?ch[h-1]:0));
+      q[1]+=o.p*o.removed;
+      if(H>2){const ch=vals(o.board,H-1,o.hi,o.lo);for(let h=2;h<=H;h++)q[h]+=o.p*(o.removed+ch[h-1]);}
     }
     if(o.removed>1)pc+=o.p;
     if(o.removed>maxRm)maxRm=o.removed;
