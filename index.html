@@ -73,6 +73,7 @@ footer a:hover{color:var(--acc)}
   <div class="row">
    <button class="btn" id="go">計算</button>
    <button class="btn sec" id="sim" disabled>模擬點擊</button>
+   <button class="btn sec" id="rst" hidden>回復版面</button>
    <button class="btn sec" id="up">📷 上傳截圖</button>
    <input type="file" id="file" accept="image/*" hidden>
   </div>
@@ -425,7 +426,7 @@ function rank(){ // 排名 index -> rank
 }
 function render(){
   const g=$('grid');g.innerHTML='';g.classList.remove('stage');
-  if(simShown){simShown=false;setSimBtn();}
+  if(simShown||sim){simShown=false;sim=null;setSimBtn();}
   const order=rank();
   let lo=0,hi=1;
   if(results){const bs=results.map(x=>x.best);lo=Math.min(...bs);hi=Math.max(...bs);}
@@ -490,7 +491,7 @@ function engine(){
 // 回傳 steps:clear(消除哪些卡)與 fall(哪些卡下移、哪些新卡從上方掉入)交替
 function buildSteps(start,idx){
   const E=engine();E.setIgn(1);
-  const b=Int8Array.from(start),ids=[...Array(25).keys()],colorOf=new Map();
+  const b=Int8Array.from(start),ids=[...Array(25).keys()].map(i=>start[i]>=0?i:null),colorOf=new Map(); // 起始盤面可以有空格(-1)
   start.forEach((c,i)=>colorOf.set(i,c));
   let nid=25,toClear=[idx];const steps=[];let total=0;
   for(let round=0;round<60;round++){
@@ -515,20 +516,51 @@ function buildSteps(start,idx){
   }
   return {steps,total,final:Array.from(b),colorOf};
 }
+// 不補牌的情況下點 idx:回傳連鎖結束後的盤面(空格為 -1)與消除張數。規則與 buildSteps 相同
+function dropSim(start,idx){
+  const E=engine();E.setIgn(1);
+  const b=Int8Array.from(start);b[idx]=-1;let total=1;
+  for(;;){
+    const moved=new Uint8Array(25);
+    for(let c=0;c<5;c++){
+      let w=4;
+      for(let r=4;r>=0;r--){
+        const i=r*5+c;
+        if(b[i]<0)continue;
+        if(w!==r){b[w*5+c]=b[i];b[i]=-1;moved[w*5+c]=1;}
+        w--;
+      }
+    }
+    const n=E.clearGroups(b,moved,null);
+    if(!n)break;
+    total+=n;
+  }
+  return {b,total};
+}
+// 模擬的下一步:不補牌、只看盤面上現有的牌,在剩下的 m 步內能消除最多張的點法,回傳第一下要點的格子(沒有牌可點時 idx 為 -1)
+function bestNext(b,m){
+  let best=-1,idx=-1;
+  for(let i=0;i<25;i++){
+    if(b[i]<0)continue;
+    const r=dropSim(b,i);
+    const v=r.total+(m>1?Math.max(0,bestNext(r.b,m-1).total):0);
+    if(v>best){best=v;idx=i;}
+  }
+  return {idx,total:best};
+}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let animating=false;
+// 播放「點 idx」的動畫(start 可以有空格),回傳這一步消除的張數、連鎖輪數與結束後的盤面
 async function animate(start,idx){
-  if(animating)return;animating=true;
-  $('sim').disabled=true;$('go').disabled=true;
+  animating=true;setSimBtn();$('go').disabled=true;
   const sp=0.5;
-  const {steps,total,final,colorOf}=buildSteps(start,idx);
+  const {steps,total,final}=buildSteps(start,idx);
   const g=$('grid');g.innerHTML='';g.classList.add('stage');
   g.style.setProperty('--fall',(0.5*sp)+'s');g.style.setProperty('--popd',(0.45*sp)+'s');
   const els=new Map();
   const place=(el,row,col)=>{el.style.setProperty('--r',row);el.style.setProperty('--c',col);};
   const mk=(color,row,col)=>{const el=document.createElement('div');el.className='cell tile c'+color;el.textContent=NAMES[color];place(el,row,col);g.appendChild(el);return el;};
-  start.forEach((c,i)=>els.set(i,mk(c,Math.floor(i/5),i%5)));
-  const pos=i=>`第${Math.floor(i/5)+1}列第${i%5+1}行`;
+  start.forEach((c,i)=>{if(c>=0)els.set(i,mk(c,Math.floor(i/5),i%5));});
   $('hint').textContent=`點擊 ${pos(idx)}(${NAMES[start[idx]]})…`;
   let cum=0;
   await sleep(350*sp);
@@ -547,21 +579,42 @@ async function animate(start,idx){
       await sleep(500*sp+120);
     }
   }
-  // 模擬只是預覽:盤面與排名結果都維持不變
-  $('hint').textContent=`模擬:點了${pos(idx)},共消除 ${total} 張(連鎖 ${steps.filter(s=>s.type==='clear').length-1} 輪)。模擬不補新牌,只看既有卡片掉落後的連鎖;盤面沒有改變。`;
-  simShown=true;animating=false;setSimBtn();$('go').disabled=false;
+  animating=false;$('go').disabled=!!workers;
+  return {total,rounds:steps.filter(s=>s.type==='clear').length-1,final};
 }
-let simShown=false; // true:格子目前顯示的是模擬後的畫面
+const pos=i=>`第${Math.floor(i/5)+1}列第${i%5+1}行`;
+// 模擬狀態。simShown:格子目前顯示的是模擬後的畫面(盤面與排名結果都維持不變,模擬只是預覽)。
+// sim:進行中的模擬 {plan:規劃步數, done:已模擬步數, total:累計消除, b:目前的模擬盤面(空格為 -1), next:下一步要點的格子(-1 表示沒有了)}
+let simShown=false,sim=null;
 function setSimBtn(){ // 有計算結果(或正顯示模擬畫面)才能按;動畫播放中停用
-  const b=$('sim');b.textContent=simShown?'回復版面':'模擬點擊';
-  b.disabled=animating||(!results&&!simShown);
+  const b=$('sim'),r=$('rst'),multi=simShown&&sim&&sim.plan>1;
+  // 規劃多步時:模擬後原按鈕變成「模擬下一步」,另外出現「回復版面」;只規劃 1 步時,原按鈕直接變成「回復版面」
+  b.textContent=multi?'模擬下一步':simShown?'回復版面':'模擬點擊';
+  b.disabled=animating||(!results&&!simShown)||(multi&&sim.next<0);
+  r.hidden=!multi;r.disabled=animating;
 }
-function simulate(){ // 播放一次隨機模擬;模擬完按鈕變成「回復版面」
+function restoreBoard(){
   if(animating)return;
-  if(simShown){render();$('hint').textContent='已回復為你的盤面,可以再次模擬。';return;}
-  animate(board.slice(),simTarget());
+  render();$('hint').textContent='已回復為你的盤面,可以再次模擬。';
 }
-
+const NOFILL='模擬不補新牌,只看盤面上現有的牌;你的盤面沒有改變。';
+async function simulate(){ // 第一次按:模擬選定的起手點;規劃多步時,之後每按一次模擬下一步
+  if(animating)return;
+  if(simShown&&!(sim&&sim.plan>1)){restoreBoard();return;}
+  if(!simShown){const idx=simTarget();sim={plan:results[idx].bestH,done:0,total:0,b:board.slice(),next:idx};}
+  if(sim.next<0)return;
+  const cur=sim,idx=cur.next;
+  const r=await animate(cur.b,idx);
+  cur.b=r.final;cur.done++;cur.total+=r.total;
+  const left=cur.plan-cur.done;
+  cur.next=left>0?bestNext(cur.b,left).idx:-1;
+  simShown=true;setSimBtn();
+  const head=cur.plan>1?`模擬第 ${cur.done}/${cur.plan} 步:`:'模擬:';
+  let msg=`${head}點了${pos(idx)},消除 ${r.total} 張(連鎖 ${r.rounds} 輪)`+(cur.plan>1?`,累計 ${cur.total} 張。`:'。');
+  if(cur.next>=0)msg+=`下一步會點 ${pos(cur.next)}(${NAMES[cur.b[cur.next]]}),按「模擬下一步」繼續。`;
+  else if(cur.plan>1)msg+=left>0?'盤面上已經沒有牌可點。':`規劃的 ${cur.plan} 步已模擬完。`;
+  $('hint').textContent=msg+NOFILL;
+}
 function stopWorkers(){
   if(workers){workers.forEach(w=>w.terminate());workers=null;}
   if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;}
@@ -809,6 +862,7 @@ function redrawShot(apply=true){
 })();
 
 $('sim').onclick=simulate;
+$('rst').onclick=restoreBoard;
 // 在推薦列表點一列:選擇要模擬的起手點
 $('res').onclick=e=>{
   const tr=e.target.closest('tr.pick');
