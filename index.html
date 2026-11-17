@@ -181,8 +181,16 @@ function cascade(b,moved,nw,ac){ // ac:一開始有牌位移的欄(位元),之�
     if(!n)break;
     removed+=n;for(let i=0;i<CELLS;i++){moved[i]=0;nw[i]=0;}
     ac=clrCols;
-    const em=gravity(b,moved,nw,emC,ac);
-    for(let i=0;i<em.length;i++)b[em[i]]=draw();
+    // 重力與補牌合併成一次掃描:各欄由左到右、每欄由下往上補,抽牌順序與先重力再補牌相同
+    for(let c=0;c<N;c++){
+      if(!((ac>>c)&1))continue;
+      let w=N-1;
+      for(let r=N-1;r>=0;r--){
+        const v=b[r*N+c];
+        if(v>=0){ if(w!==r){b[w*N+c]=v;moved[w*N+c]=1;} w--; }
+      }
+      for(let r=w;r>=0;r--){const q=r*N+c;b[q]=draw();moved[q]=1;nw[q]=1;}
+    }
     casRnd=true;
   }
   return removed;
