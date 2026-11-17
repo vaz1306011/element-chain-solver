@@ -270,17 +270,30 @@ let COL=null;
 const ZEROS=new Float64Array(8);
 // 只剩最後 1 步時只需要「最佳一步的期望消除數」:不必建立、合併後續盤面物件,直接累加機率 × 消除數。
 // 盤面一律是滿的(點一張只空出頂端 1 格),流程與 expand 的單格路徑相同,亂數抽取順序也相同
+const CN=new Int8Array(CELLS),QA=new Float64Array(CELLS); // 各點擊的等價代表、各點擊的期望消除數
 function leafVal(board,hi,lo){
   const k1=lo*8+1;
   let sub=memo.get(k1);
   if(sub===undefined){sub=new Map();memo.set(k1,sub);}
   const got=sub.get(hi);if(got!==undefined)return got;
   if(COL!==null&&COL.H===1){COL.boards.push(board);sub.set(hi,0);return 0;}
-  const saved=rs;rs=seedOf(hi,lo,1);
+  const saved=rs,sd=seedOf(hi,lo,1);
   let best=0;
   bb.set(board);
   for(let a=0;a<CELLS;a++){
     const c=a%N,an=AFFN[a],at=AFFT[a];
+    // 等價點擊:同欄上下相鄰且同色的兩格,點哪一格得到的盤面都一樣。它們共用同一組亂數(以最上面那格為代表),
+    // 所以算出來的值必然相同,直接沿用上面那格的結果。
+    // 例外:這一格本來就在某條既有的三連上(橫向,或往下的直向三連)時,「有沒有位移」會影響消除判定,就照常計算
+    let cn=a;
+    if(a>=N&&board[a]===board[a-N]){
+      cn=CN[a-N];
+      const v=board[a],rb=a-c;let l=c,r=c;
+      while(l>0&&board[rb+l-1]===v)l--;
+      while(r<N-1&&board[rb+r+1]===v)r++;
+      if(r-l<2&&!(a+2*N<CELLS&&board[a+N]===v&&board[a+2*N]===v)){CN[a]=cn;QA[a]=QA[a-N];continue;} // 等價:沿用
+    }
+    CN[a]=cn;rs=(sd^Math.imul(cn+1,0x27D4EB2F))|0;
     for(let i=a;i>=N;i-=N)bb[i]=bb[i-N];
     let baseHit=false;
     for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
@@ -295,6 +308,7 @@ function leafVal(board,hi,lo){
       else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a]));}
     }
     for(let i=c;i<=a;i+=N)bb[i]=board[i]; // 只還原被這次點擊改動的那一欄
+    QA[a]=q;
     if(q>best)best=q;
   }
   rs=saved;
