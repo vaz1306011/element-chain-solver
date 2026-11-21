@@ -715,10 +715,13 @@ function run(){
     $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
     render();showResults();
   };
-  // Worker 數量依工作量決定(剩 1 步的盤面很便宜,剩 2 步的約貴 80 倍),每個 Worker 約領 2 批
-  // (實測分得更細並不會更快:同一批裡相鄰的盤面共用較多快取)
+  // Worker 數量依工作量決定(剩 1 步的盤面很便宜,剩 2 步的約貴 80 倍)
+  // 分批採「遞減批量」:每批 = 剩餘盤面數 /(2×Worker 數),先領大批、越到後面批越小(最小 16 盤),
+  // 這樣最後不會有 Worker 還在算一大批、其他人閒置(固定批量時完工時間比理想值慢約 20%);
+  // 同一批仍是相鄰的盤面(共用較多快取),Worker 的快取也會跨批保留,所以總計算量只多不到 1%
   const nW=Math.max(1,Math.min(navigator.hardwareConcurrency||4,32,Math.ceil(n*(Hf===1?1:80)/2000)));
-  const chunk=Math.max(16,Math.ceil(n/(nW*2))),nChunks=Math.ceil(n/chunk);
+  const bounds=[];for(let pos=0;pos<n;){const sz=Math.max(16,Math.ceil((n-pos)/(2*nW)));bounds.push(pos,Math.min(n,pos+sz));pos+=sz;}
+  const nChunks=bounds.length/2;
   const src=$('engine').textContent+`
   onmessage=e=>{const d=e.data;IGN=d.ign;const v=evalBoards(d.boards,d.Hf);postMessage({i:d.i,v},[v.buffer]);};
   `;
@@ -727,14 +730,14 @@ function run(){
   if(n===0){finish(vals);return;}
   const feed=w=>{
     if(next>=nChunks)return;
-    const i=next++,boards=fb.slice(i*chunk*25,Math.min(n,(i+1)*chunk)*25);
+    const i=next++,boards=fb.slice(bounds[2*i]*25,bounds[2*i+1]*25);
     w.postMessage({i,boards,Hf,ign:1},[boards.buffer]);
   };
   workers=[];
   for(let k=0;k<nW;k++){
     const w=new Worker(url);workers.push(w);
     w.onmessage=e=>{
-      vals.set(e.data.v,e.data.i*chunk*Hf);done++;
+      vals.set(e.data.v,bounds[2*e.data.i]*Hf);done++;
       $('pg').style.width=(done/nChunks*100)+'%';
       if(done<nChunks)feed(w);else finish(vals);
     };
