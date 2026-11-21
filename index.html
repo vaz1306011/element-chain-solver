@@ -137,9 +137,13 @@ let clrCols=0; // 最近一次 clearMasks 實際消除的格子所在的欄(位�
 let HST=0,NC0=0,NC4=0; // 橫向三連起點只能在第 0~2 欄;NC0/NC4:非第 0 欄/非第 4 欄的格(避免位移時跨列)
 for(let r=0;r<N;r++){HST|=7<<(r*N);NC0|=30<<(r*N);NC4|=15<<(r*N);}
 const CM=new Int32Array(5);
-function clearMasks(b,mv,nwm){
+function buildCM(b){
   CM[0]=0;CM[1]=0;CM[2]=0;CM[3]=0;CM[4]=0;
   for(let i=0;i<CELLS;i++)CM[b[i]]|=1<<i; // 盤面上的 -1(空格)不屬於任何顏色
+}
+function clearMasks(b,mv,nwm){buildCM(b);return clearInc(b,mv,nwm);}
+// 要求 CM 已是 b 的顏色遮罩;消除後同步更新 CM
+function clearMk(mv,nwm){
   const old=IGN?~nwm:-1; // 非新補的格;IGN 開啟時,完全由新補卡片組成的線不算
   let mk=0;
   for(let k=0;k<5;k++){
@@ -164,11 +168,17 @@ function clearMasks(b,mv,nwm){
     }
   }
   if(mk===0)return 0;
+  const keep=~mk;CM[0]&=keep;CM[1]&=keep;CM[2]&=keep;CM[3]&=keep;CM[4]&=keep;
+  return mk;
+}
+// 把 mk 標記的格從 b 清掉,回傳張數(clrCols 設為這些格所在的欄)
+function applyMk(b,mk){
   let total=0,cols=0;
   for(let m=mk;m!==0;m&=m-1){const i=31-Math.clz32(m&-m);b[i]=-1;total++;cols|=COLB[i];} // 只走訪被標記的格
   clrCols=cols;
   return total;
 }
+function clearInc(b,mv,nwm){const mk=clearMk(mv,nwm);return mk===0?0:applyMk(b,mk);}
 // 給主執行緒的模擬動畫用:以陣列表示 moved/nw(盤面可含 -1 空格)
 function clearGroups(b,moved,nw){
   let mv=0,nwm=0;
@@ -176,31 +186,40 @@ function clearGroups(b,moved,nw){
   return clearMasks(b,mv,nwm);
 }
 let casRnd=false; // casRnd:這次 cascade 是否有補過新牌
+const COLM=new Int32Array(N);for(let c=0;c<N;c++)for(let r=0;r<N;r++)COLM[c]|=1<<(r*N+c);
 // 連鎖:反覆「消除 → 重力+補牌」直到沒有可消除的。mv/nwm:一開始有位移/新補的格(位元)。
 // 重力與補牌合併成一次掃描,只處理上一輪有消除的欄:各欄由左到右、每欄由下往上補(抽牌順序固定)
 function cascade(b,mv,nwm){
-  let removed=0;casRnd=false;
+  buildCM(b);
+  const n=clearInc(b,mv,nwm);
+  if(!n){casRnd=false;return 0;}
+  casRnd=true;
+  return cascadeRest(b,clrCols,n);
+}
+// 已完成第一輪消除(CM 與 b 一致,ac:該輪消除所在的欄,removed:已消除張數),繼續做完後面的重力、補牌與連鎖
+function cascadeRest(b,ac,removed){
   for(;;){
-    const n=clearMasks(b,mv,nwm);
-    if(!n)break;
-    removed+=n;mv=0;nwm=0;
-    const ac=clrCols;
+    let mv=0,nwm=0;
     for(let c=0;c<N;c++){
       if(!((ac>>c)&1))continue;
       let w=N-1;
+      const cm=COLM[c],ke=~cm;
+      CM[0]&=ke;CM[1]&=ke;CM[2]&=ke;CM[3]&=ke;CM[4]&=ke;
       for(let r=N-1;r>=0;r--){
         const v=b[r*N+c];
-        if(v>=0){ if(w!==r){b[w*N+c]=v;mv|=1<<(w*N+c);} w--; }
+        if(v>=0){ const q=w*N+c; if(w!==r){b[q]=v;mv|=1<<q;} CM[v]|=1<<q; w--; }
       }
-      for(let r=w;r>=0;r--){const q=r*N+c;b[q]=draw();mv|=1<<q;nwm|=1<<q;}
+      for(let r=w;r>=0;r--){const q=r*N+c,v=draw();b[q]=v;CM[v]|=1<<q;mv|=1<<q;nwm|=1<<q;}
     }
-    casRnd=true;
+    const n=clearInc(b,mv,nwm);
+    if(!n)break;
+    removed+=n;ac=clrCols;
   }
   return removed;
 }
 // 預先算好:點下 idx 後可能新形成三連的線(經過同欄、該列以上的格子),以平的 [a,b,c,...] 存放。
 // 點擊後頂端新牌的格子是 idx%N:經過它的線(AFFT)隨補入顏色而定,其餘(AFFN)與補入顏色無關
-const AFFT=[],AFFN=[];
+const AFFT=[],AFFN=[],AFFT2=[];
 for(let idx=0;idx<CELLS;idx++){
   const col=idx%N,row=(idx/N)|0,lt=[],ln=[];
   const touch=p=>p%N===col&&((p/N)|0)<=row;
@@ -208,6 +227,8 @@ for(let idx=0;idx<CELLS;idx++){
   for(let r=0;r<N;r++)for(let c=0;c<=N-3;c++){const a=r*N+c;push(a,a+1,a+2);}
   for(let c=0;c<N;c++)for(let r=0;r<=N-3;r++){const a=r*N+c;push(a,a+N,a+2*N);}
   AFFT.push(Int8Array.from(lt));AFFN.push(Int8Array.from(ln));
+  const t2=[];for(let j=0;j<lt.length;j+=3){const o=[lt[j],lt[j+1],lt[j+2]].filter(x=>x!==col);t2.push(o[0],o[1]);}
+  AFFT2.push(Int8Array.from(t2)); // 經過頂端新牌格的線,另外兩格(新牌顏色等於這兩格的顏色時成線)
 }
 // 點下 idx:同欄該列以上整段下移一格,頂端(格 idx%N)補 1 張新牌。盤面一律是滿的,所以每次只空出 1 格。
 // 每個點擊位置固定的「有位移的格」(MOVEDM)與「新補的格」(NWM)預先算好,cascade 以它們為起點
@@ -218,7 +239,9 @@ for(let idx=0;idx<CELLS;idx++){
   MOVEDM.push(m);NWM.push(1<<col);
 }
 // 暫存緩衝區與合併用的 Map 提到外面重複使用(expand 不會遞迴呼叫自己)
-const bb=new Int8Array(CELLS),b2=new Int8Array(CELLS),b3=new Int8Array(CELLS);
+// 25 格 + 3 格補齊成 7 個 32 位元字:小陣列用 .set 呼叫開銷偏大,leafVal 熱路徑改用字複製
+const WB=()=>{const a=new ArrayBuffer(28);return [new Int8Array(a,0,CELLS),new Int32Array(a)];};
+const [bb,bb32]=WB(),[b2]=WB(),[b3,b3w]=WB(),[b4,b4w]=WB();
 const mapE=new Map();let outE=null;
 // 以數字 key 合併相同結果(盤面全為 0~4,切成前 12 格與後 13 格各編成 5 進位整數 hi/lo)
 function addK(p,bd,rm,hi,lo){
@@ -277,16 +300,24 @@ let COL=null;
 const ZEROS=new Float64Array(8);
 // 只剩最後 1 步時只需要「最佳一步的期望消除數」:不必建立、合併後續盤面物件,直接累加機率 × 消除數。
 // 盤面一律是滿的(點一張只空出頂端 1 格),流程與 expand 的單格路徑相同,亂數抽取順序也相同
+const NP=new Int8Array(CELLS),NV=new Int8Array(CELLS); // 補牌的格、抽到的顏色
+const BM=new Int32Array(5),SB=new Int32Array(5); // 這個盤面各顏色的遮罩;點擊後(頂端新牌除外)的遮罩
 const CN=new Int8Array(CELLS),QA=new Float64Array(CELLS); // 各點擊的等價代表、各點擊的期望消除數
+// 葉節點(剩 1 步)的快取:(hi,lo) -> 值。固定大小的直接映射快取(雜湊衝突就覆蓋舊的):快取只是省重算,
+// 掉了一筆頂多重算一次(值只由盤面決定),結果不變;大小固定所以記憶體小、不必擴張。實測命中率與無限大的表幾乎相同
+const LT_BITS=19,LT_M=(1<<LT_BITS)-1;
+let LT_H=new Int32Array(1<<LT_BITS),LT_L=new Int32Array(1<<LT_BITS),LT_V=new Float64Array(1<<LT_BITS),LT_N=0;
+function ltSlot(hi,lo){let h=Math.imul(hi,0x9E3779B1)^Math.imul(lo,0x85EBCA6B);h^=h>>>15;h=Math.imul(h,0x2C1B3C6D);h^=h>>>13;return h&LT_M;}
+function ltPut(hi,lo,v){const i=ltSlot(hi,lo);LT_H[i]=hi+1;LT_L[i]=lo;LT_V[i]=v;LT_N=1;}
+function memoClear(){memo.clear();if(LT_N>0){LT_H.fill(0);LT_N=0;}}
 function leafVal(board,hi,lo){
-  const k1=lo*8+1;
-  let sub=memo.get(k1);
-  if(sub===undefined){sub=new Map();memo.set(k1,sub);}
-  const got=sub.get(hi);if(got!==undefined)return got;
-  if(COL!==null&&COL.H===1){COL.boards.push(board);sub.set(hi,0);return 0;}
+  {const i=ltSlot(hi,lo);if(LT_H[i]===hi+1&&LT_L[i]===lo)return LT_V[i];}
+  if(COL!==null&&COL.H===1){COL.boards.push(board);ltPut(hi,lo,0);return 0;}
   const saved=rs,sd=seedOf(hi,lo,1);
   let best=0;
   bb.set(board);
+  BM[0]=0;BM[1]=0;BM[2]=0;BM[3]=0;BM[4]=0;
+  for(let i=0;i<CELLS;i++)BM[board[i]]|=1<<i;
   for(let a=0;a<CELLS;a++){
     const c=a%N,an=AFFN[a],at=AFFT[a];
     // 等價點擊:同欄上下相鄰且同色的兩格,點哪一格得到的盤面都一樣。它們共用同一組亂數(以最上面那格為代表),
@@ -304,22 +335,69 @@ function leafVal(board,hi,lo){
     for(let i=a;i>=N;i-=N)bb[i]=bb[i-N];
     let baseHit=false;
     for(let j=0;j<an.length;j+=3){const x=bb[an[j]];if(x===bb[an[j+1]]&&x===bb[an[j+2]]){baseHit=true;break;}}
-    let q=0;
+    let q=0,sb=false,hm=31;
+    if(!baseHit){hm=0;const t2=AFFT2[a];for(let j=0;j<t2.length;j+=2){const x=bb[t2[j]];if(x===bb[t2[j+1]])hm|=1<<x;}} // 補入哪些顏色會成線
     for(let d=0;d<K;d++){
       const p=weights[d];
       if(!(p>0))continue;
-      bb[c]=d;
-      let hit=baseHit;
-      if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
-      if(!hit)q+=p;
-      else{let s=0;for(let k=0;k<R;k++){b3.set(bb);s+=cascade(b3,MOVEDM[a],NWM[a]);}q+=p*(1+s/R);}
+      if(!((hm>>d)&1))q+=p;
+      else{
+        bb[c]=d;
+        // R 次取樣的第一輪消除不含亂數,只算一次;各次取樣從消除後的狀態(b4/CM4)開始往後抽牌
+        if(!sb){ // 點 a 之後(頂端新牌除外)各顏色的遮罩:a 以上的格往下一列
+          const mm=MOVEDM[a],nm=~mm;
+          for(let k=0;k<5;k++){const m=BM[k];SB[k]=(m&nm)|((m&mm)<<N)&mm;}
+          sb=true;
+        }
+        for(let k=0;k<5;k++)CM[k]=SB[k];
+        CM[d]|=1<<c;
+        {b3w[0]=bb32[0];b3w[1]=bb32[1];b3w[2]=bb32[2];b3w[3]=bb32[3];b3w[4]=bb32[4];b3w[5]=bb32[5];b3w[6]=bb32[6];}
+        const n1=clearInc(b3,MOVEDM[a],NWM[a]);
+        let s=0;
+        if(n1){
+          // 第一輪消除後的重力壓實也不含亂數,同樣只做一次:記下壓實後的盤面(b4)、遮罩(c0~c4)、有位移的格(mv)、
+          // 要補新牌的格(依抽牌順序:欄由左到右、每欄由下往上)。各次取樣只負責抽新牌,多半抽完沒有下一輪消除,不必動盤面
+          const ac=clrCols;let mv=0,nn=0,nwm=0;
+          for(let cc=0;cc<N;cc++){
+            if(!((ac>>cc)&1))continue;
+            let w=N-1;
+            const cm=COLM[cc],ke=~cm;
+            CM[0]&=ke;CM[1]&=ke;CM[2]&=ke;CM[3]&=ke;CM[4]&=ke;
+            for(let r=N-1;r>=0;r--){
+              const v=b3[r*N+cc];
+              if(v>=0){const qq=w*N+cc;if(w!==r){b3[qq]=v;mv|=1<<qq;}CM[v]|=1<<qq;w--;}
+            }
+            for(let r=w;r>=0;r--){const qq=r*N+cc;NP[nn++]=qq;mv|=1<<qq;nwm|=1<<qq;}
+          }
+          {b4w[0]=b3w[0];b4w[1]=b3w[1];b4w[2]=b3w[2];b4w[3]=b3w[3];b4w[4]=b3w[4];b4w[5]=b3w[5];b4w[6]=b3w[6];}
+          const c0=CM[0],c1=CM[1],c2=CM[2],c3=CM[3],c4=CM[4];
+          for(let k=0;k<R;k++){
+            CM[0]=c0;CM[1]=c1;CM[2]=c2;CM[3]=c3;CM[4]=c4;
+            let r=rs; // 抽牌(同 draw())用區域變數,避免每張都讀寫外層狀態
+            for(let t=0;t<nn;t++){
+              r=r+0x6D2B79F5|0;let u=Math.imul(r^r>>>15,1|r);u=u+Math.imul(u^u>>>7,61|u)^u;
+              const kk=(u^u>>>14)>>>0;let v;
+              if(UNI)v=(kk*K/4294967296)|0;else{v=K-1;const f=kk/4294967296;for(let i=0;i<K;i++)if(f<cum[i]){v=i;break;}}
+              NV[t]=v;CM[v]|=1<<NP[t];
+            }
+            rs=r;
+            const mk=clearMk(mv,nwm);
+            if(mk===0){s+=n1;continue;}
+            {b3w[0]=b4w[0];b3w[1]=b4w[1];b3w[2]=b4w[2];b3w[3]=b4w[3];b3w[4]=b4w[4];b3w[5]=b4w[5];b3w[6]=b4w[6];}
+            for(let t=0;t<nn;t++)b3[NP[t]]=NV[t];
+            const n2=applyMk(b3,mk);
+            s+=cascadeRest(b3,clrCols,n1+n2);
+          }
+        }
+        q+=p*(1+s/R);
+      }
     }
     for(let i=c;i<=a;i+=N)bb[i]=board[i]; // 只還原被這次點擊改動的那一欄
     QA[a]=q;
     if(q>best)best=q;
   }
   rs=saved;
-  sub.set(hi,best);return best;
+  ltPut(hi,lo,best);return best;
 }
 // vals(board,H)[h] = 連點 h 下(1..H)能得到的最大期望總消除數(hi/lo:盤面的數字編碼,呼叫端已算好時帶入)。
 // 只用於 H>=2:剩 1 步由 leafVal 處理(兩者共用 memo,以 key 裡的 H 區分)
@@ -355,10 +433,10 @@ function vals(board,H,hi,lo){
 const frontierH=H=>H>=4?H-2:1; // 前緣盤面還剩幾步:4 步時前緣是「兩步後、剩 2 步」,2~3 步時是最後 1 步
 // 主執行緒:收集分析 acts 這些第一步會用到的前緣盤面(已去重),回傳平鋪的 Uint8Array(每盤 25 格)
 function collectFrontier(board,H,acts){
-  memo.clear();COL={H:frontierH(H),boards:[]};
+  memoClear();COL={H:frontierH(H),boards:[]};
   let list;
   try{for(const a of acts){rs=12345+a;analyzeOne(board,H,a);}list=COL.boards;}
-  finally{COL=null;memo.clear();} // 收集時前緣以上算出的是佔位值,全部丟掉
+  finally{COL=null;memoClear();} // 收集時前緣以上算出的是佔位值,全部丟掉
   const out=new Uint8Array(list.length*CELLS);
   for(let i=0;i<list.length;i++)out.set(list[i],i*CELLS);
   return out;
@@ -383,11 +461,11 @@ function putFrontier(boards,Hf,values){
     let hi=0,lo=0;
     for(let j=0;j<12;j++)hi=hi*5+boards[i*CELLS+j];
     for(let j=12;j<CELLS;j++)lo=lo*5+boards[i*CELLS+j];
+    if(Hf===1){ltPut(hi,lo,values[i]);continue;}
     const k1=lo*8+Hf;
     let sub=memo.get(k1);
     if(sub===undefined){sub=new Map();memo.set(k1,sub);}
-    if(Hf===1)sub.set(hi,values[i]);
-    else{const v=new Float64Array(Hf+1);for(let h=1;h<=Hf;h++)v[h]=values[i*Hf+h-1];sub.set(hi,v);}
+    const v=new Float64Array(Hf+1);for(let h=1;h<=Hf;h++)v[h]=values[i*Hf+h-1];sub.set(hi,v);
   }
 }
 // 第一步「點 a」本身的期望消除數(含被點的那張):補入的五種顏色各算一次,會連鎖到補牌的顏色重複取樣 n 次取平均。
@@ -519,7 +597,7 @@ function showResults(){
 // 在主執行緒也載入一份引擎:用來產生模擬動畫的每一步,以及計算時展開前兩步、合併 Worker 的結果
 let ENG=null;
 function engine(){
-  if(!ENG)ENG=new Function($('engine').textContent+";return {setIgn:v=>{IGN=v},setR:v=>{R=v},seed:v=>{rs=v},clearMemo:()=>memo.clear(),clearGroups,draw,analyzeOne,collectFrontier,putFrontier,frontierH}")();
+  if(!ENG)ENG=new Function($('engine').textContent+";return {setIgn:v=>{IGN=v},setR:v=>{R=v},seed:v=>{rs=v},clearMemo:()=>memoClear(),clearGroups,draw,analyzeOne,collectFrontier,putFrontier,frontierH}")();
   return ENG;
 }
 // 回傳 steps:clear(消除哪些卡)與 fall(哪些卡下移、哪些新卡從上方掉入)交替
