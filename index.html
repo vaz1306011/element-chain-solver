@@ -58,6 +58,11 @@ th{color:var(--mut);font-weight:600;font-size:12px}
 .rec .no{width:22px;color:var(--mut);font-weight:700;text-align:center}
 .rec .pos{flex:1}
 .rec .sc{width:90px;text-align:right}
+.rec-h{display:flex;align-items:flex-end;gap:10px;padding:0 10px;margin-top:8px}
+.rec-h .sp{flex:1}
+.rec-h .sk{width:90px;text-align:right;background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);font:inherit;font-size:12px;line-height:1.3;padding:0 0 2px;cursor:pointer}
+.rec-h .sk.on{color:var(--tx);border-bottom-color:var(--acc);font-weight:700}
+.rec-h .sk:hover{color:var(--tx)}
 .rec .hs{margin-top:4px}
 .cell.pk::after{content:'👆';position:absolute;right:3px;bottom:1px;font-size:22px;line-height:1;filter:drop-shadow(0 0 2px #000)}
 details{margin-top:10px}summary{cursor:pointer;color:var(--mut);font-size:13px}
@@ -553,6 +558,7 @@ let board=[
  3,3,2,4,1,
  0,4,0,2,2,
  2,4,0,0,1];
+let sortBy='best'; // 排序依據:'best' 含天降模擬的分數、'nr' 不含天降的分數
 let brush=4,results=null,workers=null,workerUrl=null;
 let simIdx=null; // 要模擬的起手點(格子編號);null 表示用排名第 1 的
 const simTarget=()=>simIdx!=null?simIdx:rank()[0];
@@ -565,7 +571,7 @@ NAMES.forEach((n,i)=>{const b=document.createElement('button');b.className='pal 
 
 function rank(){ // 排名 index -> rank
   if(!results)return null;
-  return results.slice().sort((a,b)=>b.best-a.best).map(r=>r.idx);
+  return results.slice().sort((a,b)=>b[sortBy]-a[sortBy]).map(r=>r.idx);
 }
 function render(){
   const g=$('grid');g.innerHTML='';g.classList.remove('stage');
@@ -573,7 +579,7 @@ function render(){
   if(simShown||sim){simShown=false;sim=null;setSimBtn();}
   const order=rank();
   let lo=0,hi=1;
-  if(results){const bs=results.map(x=>x.best);lo=Math.min(...bs);hi=Math.max(...bs);}
+  if(results){const bs=results.map(x=>x[sortBy]);lo=Math.min(...bs);hi=Math.max(...bs);}
   for(let i=0;i<25;i++){
     const d=document.createElement('div');d.className='cell c'+board[i];
     let inner=NAMES[board[i]];
@@ -582,9 +588,9 @@ function render(){
       d.classList.add(r===1?'r1':r<=3?'r2':'x');
       if(i===simTarget())d.classList.add('pk');
       // 期望分數越高越鮮亮,越低越灰暗
-      const t=hi>lo?(x.best-lo)/(hi-lo):1;
+      const t=hi>lo?(x[sortBy]-lo)/(hi-lo):1;
       d.style.filter=`saturate(${(0.05+0.95*t).toFixed(2)}) brightness(${(0.5+0.5*t).toFixed(2)})`;
-      inner=`<span class="rk">#${r}</span>${r===1?'<span class="star">★</span>':''}${NAMES[board[i]]}<small>${x.best.toFixed(2)}</small>`;
+      inner=`<span class="rk">#${r}</span>${r===1?'<span class="star">★</span>':''}${NAMES[board[i]]}<small>${x[sortBy].toFixed(2)}</small>`;
     }
     d.innerHTML=inner;
     d.onclick=()=>{if(board[i]===brush&&!simShown)return; // 塗上相同屬性:盤面沒變,保留計算結果
@@ -605,25 +611,27 @@ function loadState(){
     if(!d||!Array.isArray(d.board)||d.board.length!==25||!d.board.every(v=>Number.isInteger(v)&&v>=0&&v<5))return false;
     board=d.board;
     const r=d.results;
-    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&x.q.length===DEPTH+1&&Number.isFinite(x.best)))results=r; // 舊版以其他步數算出的結果不還原
+    if(Array.isArray(r)&&r.length===25&&r.every(x=>x&&Array.isArray(x.q)&&x.q.length===DEPTH+1&&Number.isFinite(x.best)))results=r,addNR(results,board); // 舊版以其他步數算出的結果不還原
     return true;
   }catch(e){return false;}
 }
 function showResults(){
-  const order=rank();const top=results[order[0]].best||1;
-  let h='<div class="recs">';
+  const order=rank();const top=results[order[0]].best||1,topN=Math.max(...results.map(x=>x.nr))||1;
+  const sk=(k,t)=>`<button class="sk${sortBy===k?' on':''}" data-k="${k}" title="按此分數排序">${t}${sortBy===k?' ▼':''}</button>`;
+  let h=`<div class="rec-h"><span class="sp"></span>${sk('best','分數<br>(含天降模擬)')}${sk('nr','分數<br>(不含天降)')}</div><div class="recs">`;
   order.slice(0,10).forEach((idx,k)=>{
     const x=results[idx],r=Math.floor(idx/5)+1,c=idx%5+1;
     const per=x.q.slice(1).map((v,i)=>`<b>${i+1}步</b> ${(v/(i+1)).toFixed(2)}`).join(' · ');
     h+=`<div class="rec${idx===simTarget()?' sel':''}" data-idx="${idx}"><div class="hd"><span class="no">${k+1}</span><span class="pos">第${r}列 第${c}行</span><span class="cell c${board[idx]}" style="display:inline-flex;width:28px;height:28px;font-size:14px;border-width:0">${NAMES[board[idx]]}</span>
-    <span class="sc"><b>${x.best.toFixed(2)}</b> <span class="mut">消除/步</span><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></span></div>
-    <div class="hs">${per}</div></div>`;
+    <span class="sc"><b>${x.best.toFixed(2)}</b> <span class="mut">消除/步</span><div class="bar"><i style="width:${(x.best/top*100).toFixed(0)}%"></i></div></span>
+    <span class="sc"><b>${x.nr.toFixed(2)}</b> <span class="mut">消除/步</span><div class="bar"><i style="width:${(x.nr/topN*100).toFixed(0)}%"></i></div></span></div>
+    <div class="hs">${per}<br>不含天降:${x.nq.slice(1).map((v,i)=>`<b>${i+1}步</b> ${(v/(i+1)).toFixed(2)}`).join(' · ')}</div></div>`;
   });
   h+='</div><div class="mut" style="margin-top:6px">點任一張卡片可選擇「模擬點擊」要模擬的起手點(盤面上以 👆 標示)。</div>';
   $('res').innerHTML=h;hovIdx=null;
   setSimBtn();
   const b=results[order[0]];
-  $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),期望 ${b.best.toFixed(2)} 張/步。`;
+  $('hint').textContent=`建議先點 第${Math.floor(b.idx/5)+1}列 第${b.idx%5+1}行(${NAMES[board[b.idx]]}),${sortBy==='best'?'期望':'不含天降'} ${b[sortBy].toFixed(2)} 張/步。`;
 }
 // 在主執行緒也載入一份引擎:用來產生模擬動畫的每一步,以及計算時展開前兩步、合併 Worker 的結果
 let ENG=null;
@@ -694,6 +702,27 @@ function bestNext(b,m){
     if(e>extra||(e>0&&e===extra&&s<steps)){extra=e;steps=s;idx=i;}
   }
   return {idx,extra,steps};
+}
+// 不含天降的分數:完全不補新牌,只看現有的牌。第一步點 a,之後每步都挑「最多總消除張數(含被點的那張)」的點法;
+// nq[h] = 連走 h 步的最大總消除數,nr = 1~DEPTH 步中 nq[h]/h 的最大值。各起手點共用同一份 memo
+function addNR(res,bd){
+  const memo=new Map();
+  const bestTotal=(b,m)=>{ // 剩 m 步(m>=1)、不補牌時能消除的最大總張數
+    const key=m+':'+b.join();let v=memo.get(key);if(v!==undefined)return v;
+    v=0;
+    for(let i=0;i<25;i++){
+      if(b[i]<0)continue;
+      const r=dropSim(b,i);
+      const t=r.total+(m>1?bestTotal(r.b,m-1):0);
+      if(t>v)v=t;
+    }
+    memo.set(key,v);return v;
+  };
+  for(const x of res){
+    const r=dropSim(bd,x.idx);
+    x.nq=[0];for(let h=1;h<=DEPTH;h++)x.nq.push(r.total+(h>1?bestTotal(r.b,h-1):0));
+    x.nr=Math.max(...x.nq.slice(1).map((v,i)=>v/(i+1)));
+  }
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let animating=false,animGen=0; // animGen:每次開始或中斷動畫就加 1,播放中的動畫發現編號不同就停止
@@ -819,7 +848,7 @@ function run(){
     E.clearMemo();
     for(let a=0;a<25;a++)if(srcOf[a]!==a){const r=res[srcOf[a]];res[a]={...r,q:r.q.slice(),idx:a};}
     simIdx=null;
-    results=res.map(x=>{let bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs)bs=s;}x.best=bs;return x;}); // 分數 = 規劃 1~H 步中 期望/步數 最高者
+    results=res.map(x=>{let bs=-1;for(let h=1;h<=H;h++){const s=x.q[h]/h;if(s>bs)bs=s;}x.best=bs;return x;});addNR(results,bd); // 分數 = 規劃 1~H 步中 期望/步數 最高者
     $('go').disabled=animating;$('pg').style.width='100%';
     $('st').textContent=`完成,用時 ${((performance.now()-t0)/1000).toFixed(1)} 秒(${nW} 條執行緒)`;
     render();showResults();
@@ -1043,6 +1072,8 @@ $('res').onmouseover=e=>{const tr=e.target.closest('.rec');setHov(tr?+tr.dataset
 $('res').onmouseleave=()=>setHov(null);
 // 在推薦列表點一列:選擇要模擬的起手點
 $('res').onclick=e=>{
+  const sk=e.target.closest('.sk');
+  if(sk){if(animating||!results)return;sortBy=sk.dataset.k;render();showResults();return;}
   const tr=e.target.closest('.rec');
   if(!tr||animating||!results)return;
   simIdx=+tr.dataset.idx;
