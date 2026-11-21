@@ -312,7 +312,7 @@ function leafVal(board,hi,lo){
       let hit=baseHit;
       if(!hit)for(let j=0;j<at.length;j+=3){const x=bb[at[j]];if(x===bb[at[j+1]]&&x===bb[at[j+2]]){hit=true;break;}}
       if(!hit)q+=p;
-      else{b3.set(bb);q+=p*(1+cascade(b3,MOVEDM[a],NWM[a]));}
+      else{let s=0;for(let k=0;k<R;k++){b3.set(bb);s+=cascade(b3,MOVEDM[a],NWM[a]);}q+=p*(1+s/R);}
     }
     for(let i=c;i<=a;i+=N)bb[i]=board[i]; // 只還原被這次點擊改動的那一欄
     QA[a]=q;
@@ -337,7 +337,7 @@ function vals(board,H,hi,lo){
   const saved=rs;rs=seedOf(hi,lo,H);
   const best=new Float64Array(H+1);
   for(let a=0;a<CELLS;a++){
-    const outs=expand(board,a,1);
+    const outs=expand(board,a,R);
     const q=new Float64Array(H+1);
     for(const o of outs){
       if(H===2){q[1]+=o.p*o.removed;q[2]+=o.p*(o.removed+leafVal(o.board,o.hi,o.lo));continue;}
